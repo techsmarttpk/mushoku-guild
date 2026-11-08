@@ -144,6 +144,16 @@ fn random_b64(n: usize) -> Result<String, ProviderError> {
     Ok(B64.encode(buf))
 }
 
+/// RFC 4122 version-4 UUID; OpenAI validates `ext_agent_host_id` as `urn:uuid:<uuid>`.
+fn uuid_v4() -> Result<String, ProviderError> {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).map_err(|e| err(ErrorKind::Other, format!("no secure random source: {e}")))?;
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    Ok(format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32]))
+}
+
 fn jwt_claims(jwt: &str) -> Option<serde_json::Value> {
     let payload = jwt.split('.').nth(1)?;
     serde_json::from_slice(&B64.decode(payload).ok()?).ok()
@@ -290,7 +300,7 @@ impl ChatGpt {
         let nonce = random_b64(24)?;
         let verifier = random_b64(48)?;
         let challenge = B64.encode(Sha256::digest(verifier.as_bytes()).as_slice());
-        let host_id = format!("urn:uuid:{}", random_b64(16)?);
+        let host_id = format!("urn:uuid:{}", uuid_v4()?);
 
         let listener = TcpListener::bind(("127.0.0.1", PREFERRED_PORT))
             .or_else(|_| TcpListener::bind(("127.0.0.1", 0)))
@@ -570,6 +580,15 @@ mod tests {
         assert!(validate_id_token(&jwt(ok.clone()), "cid", "n", 3000).is_err());
         let bad_iss = serde_json::json!({"iss": "https://evil.example", "aud": "cid", "exp": 2000, "nonce": "n"});
         assert!(validate_id_token(&jwt(bad_iss), "cid", "n", 1000).is_err());
+    }
+
+    #[test]
+    fn host_id_is_a_version_4_uuid() {
+        let u = uuid_v4().unwrap();
+        assert_eq!(u.len(), 36);
+        assert_eq!(u.as_bytes()[14], b'4');
+        assert!(matches!(u.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
+        assert_eq!(u.matches('-').count(), 4);
     }
 
     #[test]
