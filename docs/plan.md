@@ -15,7 +15,7 @@
 | # | Phase | Status |
 |---|-------|--------|
 | 0 | Repository initialisation & governance | completed |
-| 1 | Discovery & feasibility | planned |
+| 1 | Discovery & feasibility | in-progress |
 | 2 | Foundation (project skeleton, tooling, CI) | planned |
 | 3 | MVP — headless orchestration core + real agent integration | planned |
 | 4 | MVP — presentation layer (café v1) | planned |
@@ -49,21 +49,31 @@
 
 ## Phase 1 — Discovery & feasibility
 
-- **Status:** planned
+- **Status:** in-progress (research done 2026-11-08; tests, licence review and stack decision outstanding)
 - **Objective:** Answer the open questions in `docs/context.md` §8 and choose a stack with evidence.
-- **Deliverables:** Written stack trade-off evaluation; integration spike findings; accepted ADRs; MVP scope definition; resource budgets.
-- **Dependencies:** Phase 0 complete; user available for scope questions.
+- **Deliverables:** Written stack trade-off evaluation; integration research and spike findings (`docs/context.md` §11); accepted ADRs; MVP scope definition; resource budgets.
+- **Dependencies:** Phase 0 complete; user available for scope questions and for running the ChatGPT authorization test with their own account.
 - **Tasks:**
-  - [ ] Clarify with the user: MVP scope, target platforms, prompt-agent route, approval model, persistence needs
-  - [ ] Investigate Claude Code programmatic integration (CLI subprocess vs. SDK); throwaway spike that runs a trivial task and streams output
-  - [ ] Investigate the prompt-engineering agent route (OpenAI API vs. alternatives); spike a prompt-generation call
-  - [ ] Document findings and which integration paths actually worked
+  - [x] Research the Sign in with ChatGPT open-source integration from official docs (OAuth/PKCE, host ID, tokens, models, Responses limits, errors, UI rules) → `docs/context.md` §11.1
+  - [x] Research DevKit availability and licence → noncommercial licence found (§11.1)
+  - [x] Research Claude Code headless CLI (flags, streaming, permissions, auth, sessions) from official docs → §11.2
+  - [x] Research Anthropic policy on subscription use by third-party apps → §11.3
+  - [x] Verify locally that `claude -p --output-format stream-json` runs under the existing subscription login and emits the documented event types (trivial prompt; exit 0)
+  - [x] Propose provider abstraction (ADR-0009, proposed) and record accepted ADR-0006
+  - [ ] **Run a ChatGPT authorization test with the user's Go account** (throwaway spike: registration, token exchange, scope check, `/v1/models`, one streamed response); record success or the exact error. Until done, Go eligibility stays **unconfirmed**
+  - [ ] Ask OpenAI (or fetch the help-center article that returned 403) to confirm Go eligibility for open-source plan usage
+  - [ ] Review the DevKit licence and OpenAI terms for an open-source app that implements the flow itself; choose the project licence
+  - [ ] Put the CLI-spawning pattern to Anthropic (contact link on the legal page) and record the answer
+  - [ ] Spike Claude Code on a real edit task: real `tool_use`/`tool_result` events, `--permission-prompt-tool` contract, `permission_denied` handling, cancellation and process cleanup on Windows, numeric exit codes
+  - [ ] Measure the per-run overhead of the user's global Claude config (about 110k cache tokens observed) and decide how to mitigate it
+  - [ ] Clarify with the user: MVP scope, target platforms, approval model, persistence needs, fallback if Go is ineligible
   - [ ] Evaluate candidate UI/runtime/rendering stacks against constraints; measure idle CPU/RAM for a hello-world of each shortlisted option
   - [ ] Decide stack → ADR (needs user agreement)
   - [ ] Set resource budgets from measured baselines → record in `docs/architecture.md`
   - [ ] Define MVP scope and update `docs/context.md`, `docs/system-design.md`
+  - [ ] Decide on ADR-0007, ADR-0008 and ADR-0009 (accept, change or reject)
   - [ ] Reconcile and refine Phases 2–7 of this plan
-- **Acceptance criteria:** Stack ADR `accepted`; both integration routes either proven by a spike or explicitly rejected/replaced; MVP scope written and agreed.
+- **Acceptance criteria:** Stack ADR `accepted`; both integration routes either proven by a spike or explicitly rejected/replaced (ChatGPT Go result known); licence position recorded; MVP scope written and agreed.
 - **Testing requirements:** Spikes are run for real; results (including failures) recorded verbatim in notes; measurements reproducible.
 
 ## Phase 2 — Foundation (provisional)
@@ -160,3 +170,4 @@
 
 - 2026-11-08 — Plan created during repository initialisation. Phase 0 completed and verified on remote.
 - 2026-11-08 — Documentation moved from repository root to `docs/` (ADR-0005); `CLAUDE.md` remains in root. Phase 0 status unchanged (completed). Task names above refer to the files by their original creation.
+- 2026-11-08 — Phase 1 started. Integration research completed and documented; Phase 1 tasks refined (added Go authorization test, licence review, Anthropic policy query, Claude Code spike, overhead measurement). No tasks removed.

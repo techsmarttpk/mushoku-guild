@@ -25,7 +25,7 @@ Confirmed (F-C) and proposed (F-P):
 | ID | Requirement | Basis |
 |----|-------------|-------|
 | F-C1 | User can describe a development task. | Confirmed (workflow step 1) |
-| F-C2 | System obtains an engineered implementation prompt from a prompt-engineering agent. | Confirmed (step 2), integration route open |
+| F-C2 | System obtains an engineered implementation prompt from a prompt-engineering agent. | Confirmed (step 2); intended route is ChatGPT via Sign in with ChatGPT (proposed ADR-0007, Go eligibility unconfirmed) |
 | F-C3 | System hands the prompt to Claude Code without manual copy/paste. | Confirmed (steps 3–4) |
 | F-C4 | Claude Code executes the task for real. | Confirmed (step 5, "real integrations") |
 | F-C5 | User can see what each agent is doing and task status/progress. | Confirmed |
@@ -81,8 +81,8 @@ See `docs/architecture.md` §2. Summary: UI shell, café renderer, orchestrator,
 
 | Point | Direction | Notes |
 |-------|-----------|-------|
-| Prompt agent adapter ↔ prompt service | Outbound | Route unknown (open question 1) |
-| Claude Code adapter ↔ Claude Code | Outbound + streamed output | CLI vs SDK unknown (open question 2) |
+| Reasoner adapter (ChatGPT) ↔ `auth.openai.com` / `api.openai.com/v1` | Outbound HTTPS, SSE | OAuth+PKCE and Responses API; documented, untested (`docs/context.md` §11.1) |
+| Executor adapter ↔ `claude` CLI | Child process, NDJSON stream | Headless stream-json; trivial call verified, approvals/cancel untested (§11.2) |
 | Config ↔ OS credential store | Local | Proposed |
 | Project working directory | Local | Where Claude Code runs |
 
@@ -120,22 +120,39 @@ Single user, local — "scale" means *number of concurrent agents/tasks*, not us
 
 Dependency rule: `ui` → `core`; `core` never imports `ui`; adapters never import `ui`.
 
-## 2.2 Proposed interfaces
+## 2.2 Proposed interfaces (provider abstraction — PROPOSED, ADR-0009)
 
-Pseudo-notation, not a language choice.
+Pseudo-notation, not a language choice. Rationale and diagram: `docs/architecture.md` §6a.
 
 ```
-interface Agent {
-  id: string
-  kind: "prompt-engineer" | "executor" | string
-  capabilities(): Capability[]
-  start(job: Job): AgentRun          // returns immediately
+ProviderInfo {
+  id, displayName
+  roles: ("reasoner" | "executor")[]
+  auth: "oauth-app" | "cli-owned" | "api-key"
+  features: { streaming, modelDiscovery, samplingParams, tokenLimit, approvalRequests }
 }
 
-interface AgentRun {
-  events: Stream<AgentEvent>          // Started, Output, ToolRequest, Finished, Failed
-  cancel(): void
-  respond(request_id, decision): void // answer a ToolRequest / approval
+interface AuthProvider {
+  status(): AuthStatus             // signed_out | signed_in(account) | needs_reauth | unavailable
+  signIn(): AuthFlow               // may open a browser / ask the user to run a CLI command
+  signOut()
+  // Reasoner-side providers expose credentials only to their own adapter, never to the core
+}
+
+interface Reasoner {                // e.g. ChatGPT, later DeepSeek
+  listModels(): Model[]
+  generate(req: { model, instructions, input: Message[] }): Stream<ReasonerEvent>
+    // ReasonerEvent: TextDelta | Completed | Failed(ProviderError)
+    // Caller owns conversation history; adapters must not depend on server-side state.
+}
+
+interface Executor {                // e.g. Claude Code
+  start(job: { prompt, projectPath, policy: ApprovalPolicy }): Run
+}
+interface Run {
+  events: Stream<RunEvent>          // Started | Output | ToolActivity | ApprovalRequest | Finished(outcome) | Failed
+  respond(approvalId, decision)     // only if features.approvalRequests
+  cancel()
 }
 
 interface Orchestrator {
@@ -145,9 +162,17 @@ interface Orchestrator {
   requestChanges(taskId, feedback)
   subscribe(handler): Unsubscribe
 }
+
+ProviderError { kind: not_signed_in | not_eligible | usage_limit | transient
+                       | unsupported | cancelled | failed,
+                providerCode?, message, retryable, retryAfter? }
 ```
 
-Whether the executor surfaces fine-grained `ToolRequest` approvals depends on what Claude Code's integration exposes — unverified.
+Adapter notes (from `docs/context.md` §11; behaviour marked unverified has not been tested):
+
+- **ChatGPT Reasoner:** sends `store:false, stream:true`; maps `instructions`; omits unsupported fields; success only on `response.completed`; maps `subscription_sharing_usage_limit_exceeded` → `usage_limit`, `_user_not_eligible` → `not_eligible`, `_unsupported_capability` → `unsupported`, refresh failures → `not_signed_in`, 503s → `transient`. Model list is discovered at run time, never hard-coded.
+- **Claude Code Executor:** spawns `claude -p --output-format stream-json --verbose` in the project directory with the prompt on stdin; maps result `subtype` and `is_error` to `Finished`/`Failed` (not the exit code alone); surfaces `permission_denied` events and `permission_denials`; maps `rate_limit_event` and `api_retry` auth/rate categories to `usage_limit` / `not_signed_in`. Interactive per-tool approval depends on the unverified `--permission-prompt-tool` contract; until verified, runs use a pre-approved allowed-tools list shown to the user at approval time.
+- **Future providers** implement `Reasoner` and/or `Executor` plus an `AuthProvider`; OpenAI-compatible chat APIs with an API key are expected to be the cheapest to add. Not investigated.
 
 ## 2.3 Data models
 
@@ -220,3 +245,26 @@ Structured local logs with levels, rotation and size cap; secrets redacted. Per-
 ## 2.12 Testing strategy (proposed)
 
 Unit tests for the state machine and approval gate; contract tests for adapters using a fake agent; at least one manual or automated end-to-end test against the real Claude Code before any integration is marked verified; resource measurements recorded in `docs/plan.md`.
+
+## 2.13 Provider authentication and token lifecycle (proposed)
+
+**ChatGPT (app-run OAuth):**
+
+1. On first launch generate and persist a random `urn:uuid:` host ID (opaque, not an identifier of the user).
+2. Start a loopback listener on `127.0.0.1:<port>`, open the system browser to the authorize URL with fresh `state`, `nonce`, PKCE S256 challenge, the plan-usage scope set and `resource=https://api.openai.com/v1`. First time: `client_id=dynamic_agent_client`, `agent_name_hint=Mushoku Guild`, `ext_agent_host_id`.
+3. Validate `state`, exchange the code, **save the issued client ID**, verify the ID token (signature via JWKS, issuer, audience, expiry, nonce), check the granted scopes include `chatgpt.tokens.use.direct`; otherwise mark plan usage disabled.
+4. Persist credentials (access, refresh, ID token, expiry, scopes, client ID, host ID) in a protected per-user file, written atomically with owner-only permissions; never log them. Storage mechanism (file vs OS credential store) is TBD.
+5. Refresh shortly before the one-hour access-token expiry, serialised by a single in-process lock; replace access token, expiry, scopes and the rotating refresh token together. On a terminal refresh error, clear tokens and prompt the user to sign in again with the saved client ID. Do not clear credentials on transient network failures.
+6. Sign-out: revoke the refresh token at the discovered revocation endpoint (retry with backoff; tell the user if revocation was not confirmed), then clear local tokens.
+
+All of this is documented by OpenAI but **untested** here; Go eligibility is unconfirmed (`docs/context.md` §11.1).
+
+**Claude Code (CLI-owned):** the app never handles credentials. It runs `claude auth status` (exit 0 if logged in, 1 if not) to show state, warns if `ANTHROPIC_API_KEY` is set (the CLI would then bill that key instead of the subscription), and tells the user to run `claude auth login` themselves when signed out.
+
+**API-key providers (future):** key stored via the OS credential facility; never in config files or logs.
+
+## 2.14 Plan-usage and limit handling (proposed)
+
+- Surface "Using ChatGPT plan" and a "Manage usage" link to `https://chatgpt.com/settings/usage` as required by OpenAI's UI guidelines.
+- On `usage_limit` from any provider: pause new work for that provider, keep the task resumable, show the provider's own message; do not infer a reset time from the error alone and do not silently switch provider or billing path.
+- Claude Code's `rate_limit_event` data (five-hour and seven-day utilisation) can feed a status display; the field set is observed (`docs/context.md` §11.2) but not documented, so treat it as best-effort.

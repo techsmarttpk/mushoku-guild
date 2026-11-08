@@ -60,12 +60,44 @@ Template:
 
 ---
 
+## ADR-0006: Claude Code is driven through the unmodified `claude` CLI under the user's own login; the app never handles Claude credentials
+- **Date:** 2026-11-08
+- **Status:** accepted
+- **Context:** The user specified that Claude Code should operate through its existing CLI authentication under their Claude Pro subscription. Anthropic's legal page restricts third-party developers from offering Claude.ai login or routing requests through subscription credentials, and does not address spawning the CLI (`docs/context.md` §11.3).
+- **Decision:** The Claude Code adapter launches the user's installed, unmodified `claude` binary as a child process (headless `-p` mode) and relies on the login the user has already completed. The app never reads, copies, stores or transmits Claude credentials or tokens, never sets `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` on the user's behalf, and does not use the Agent SDK with subscription authentication.
+- **Alternatives considered:** Agent SDK with an API key (does not use the subscription; remains a possible future alternative adapter); reading the CLI's stored token (prohibited by the policy text).
+- **Consequences:** The app detects login state through `claude auth status` and asks the user to log in with the CLI themselves. Policy risk is reduced but not eliminated and must be reconfirmed with Anthropic before release (`docs/plan.md` Phase 1). If the project is ever sold or hosted, this decision must be revisited.
+
+---
+
 ## Proposed (not decided)
 
-None are recorded here yet. Candidate decisions to be raised during Discovery, each of which needs user agreement before becoming `accepted`:
+Nothing below is accepted. Each needs the user's agreement and, where noted, evidence first.
 
-- UI/runtime technology and rendering approach (lightweight 2D vs. alternatives).
-- Agent integration mechanism for Claude Code and for the prompt-engineering agent.
-- Agent adapter interface shape.
-- Local persistence approach.
-- Approval model for agent actions.
+### ADR-0007 (proposed): Use Sign in with ChatGPT plan usage as the ChatGPT route
+- **Date proposed:** 2026-11-08
+- **Context:** The user wants ChatGPT as the prompt-engineering agent using an existing ChatGPT Go subscription with no API key. A documented official route exists for open-source local apps, but the current developer docs name only Plus and Pro, and Go is untested.
+- **Proposed decision:** Pursue this route, gated on a successful authorization test with the user's Go account (or written OpenAI confirmation) and a terms/licence review.
+- **Alternatives considered:** An OpenAI API key (separately billed, contradicts the user's goal); another provider such as DeepSeek through an API key; upgrading to Plus.
+- **Consequences if accepted:** Mushoku Guild must be open-source and local, follow OpenAI's UI/UX rules, and handle OAuth tokens and usage limits. If the Go test fails, a fallback decision is required.
+- **Accept when:** The Go test passes, or the user chooses to proceed regardless.
+
+### ADR-0008 (proposed): Implement the documented protocol ourselves instead of depending on the DevKit
+- **Date proposed:** 2026-11-08
+- **Context:** The DevKit is a Node-only SDK under a noncommercial licence and is not stated to be published on npm; depending on it would constrain the undecided stack and the project's own licence.
+- **Proposed decision:** Implement the small documented OAuth/PKCE + Responses SSE client behind our own adapter, using the DevKit only as a reference, subject to a licence/terms review.
+- **Alternatives considered:** Depending on or vendoring `@siwc/local` (licence and stack coupling); the Codex app-server route (adds a heavy dependency).
+- **Accept when:** The licence/terms review concludes this is acceptable.
+
+### ADR-0009 (proposed): Provider abstraction with separate auth, role and capability interfaces
+- **Date proposed:** 2026-11-08
+- **Context:** See `docs/architecture.md` §6a.
+- **Proposed decision:** Two provider roles (Reasoner for prompt engineering, Executor for task execution), a separate auth interface, a shared error taxonomy, and a registry, so new providers (for example DeepSeek) are adapters only.
+- **Alternatives considered:** One universal "Agent" interface (the earlier sketch), which mixes streaming chat with long-running tool-using jobs and forces a lowest-common-denominator design.
+- **Accept when:** The user reviews it and it is validated against both real adapters in Phase 3.
+
+### Other candidate decisions (not yet drafted)
+- UI/runtime technology and rendering approach.
+- Local persistence approach and token storage mechanism.
+- Approval model granularity (prompt approval, run approval, per-tool approval via an MCP prompt tool).
+- Project licence for Mushoku Guild (affects any use of OpenAI DevKit code).

@@ -37,8 +37,9 @@ Core idea: **a small, headless orchestration core** (tasks, handoffs, approvals,
 | Desktop shell | TBD |
 | Rendering approach for café | TBD (constraint: no heavy game engine unless justified) |
 | Persistence | TBD |
-| Agent integration — Claude Code | TBD (candidates to evaluate: CLI subprocess, Agent SDK) |
-| Agent integration — prompt engineering agent | TBD (ChatGPT/OpenAI API vs. other; feasibility open) |
+| Agent integration — Claude Code | Accepted (ADR-0006): unmodified `claude` CLI as child process, headless stream-json (ADR-0006). Agent SDK not used with subscription auth. |
+| Agent integration — prompt engineering agent | Proposed (ADR-0007): ChatGPT via Sign in with ChatGPT plan usage; self-implemented client (ADR-0008). Go eligibility unconfirmed. |
+| Provider abstraction | Proposed (ADR-0009), see §6a |
 | Packaging / installer | TBD |
 | Test framework | TBD |
 
@@ -67,13 +68,14 @@ All arrows are **proposed**.
 
 ## 5. External integrations
 
+Status of each (facts and sources in `docs/context.md` §11):
+
 | Integration | Purpose | Route | Status |
 |-------------|---------|-------|--------|
-| Prompt-engineering agent (ChatGPT originally) | Turn a task description into an implementation prompt | Unknown — API availability for the consumer product is an open question | Not investigated |
-| Claude Code | Execute the development task | Unknown — CLI subprocess or SDK to be spiked | Not investigated |
+| ChatGPT (prompt engineering) | Turn a task description into an implementation prompt | Sign in with ChatGPT "plan usage": OAuth+PKCE to `auth.openai.com`, then streaming Responses API at `api.openai.com/v1` | Documented by OpenAI; **not tested**; **Go eligibility unconfirmed**; DevKit licence is noncommercial |
+| Claude Code (execution) | Execute the development task | Spawn the user's unmodified `claude -p --output-format stream-json` under their own login (ADR-0006) | Trivial call **verified locally**; approval channel, cancellation and tool events **not yet tested** |
 | Local filesystem / Git | Project working directory, diffs for review | Via Claude Code and/or direct | Not investigated |
-
-No integration has been tested.
+| Future providers (e.g. DeepSeek) | Additional Reasoners or Executors | Adapter per provider | Not investigated |
 
 ## 6. Agent orchestration model (proposed)
 
@@ -83,20 +85,49 @@ Initial model is a **linear pipeline with human gates**, mirroring the original 
 sequenceDiagram
     actor U as User
     participant O as Orchestrator
-    participant P as Prompt agent (adapter)
-    participant C as Claude Code (adapter)
+    participant P as Reasoner (ChatGPT adapter)
+    participant C as Executor (Claude Code adapter)
     U->>O: Describe task
     O->>P: Request engineered prompt
-    P-->>O: Draft prompt
+    P-->>O: Streamed draft prompt
     O->>U: Show prompt, request approval
     U-->>O: Approve (or edit/reject)
     O->>C: Execute prompt
-    C-->>O: Progress events, output
+    C-->>O: Progress events, approval requests, output
     O->>U: Present result for review
     U-->>O: Accept / request changes
 ```
 
 Generalisation to arbitrary agent graphs is **not** in scope until a second real use case exists (see `CLAUDE.md` §4).
+
+## 6a. Provider abstraction (PROPOSED — ADR-0009, not accepted)
+
+Design goals: ChatGPT generates prompts; Claude Code executes them; a new provider (e.g. DeepSeek) is added by writing one adapter and registering it, with no change to the orchestrator, event model or UI. Keep it as small as the two real adapters require (`CLAUDE.md` §4).
+
+Three separate concerns, because the two real providers differ on each:
+
+1. **Auth** (`AuthProvider`): how the user becomes signed in. ChatGPT: app-run OAuth+PKCE with a rotating refresh token that the app must store and refresh. Claude Code: the CLI owns the login; the app only reads status and never touches credentials. A DeepSeek-style provider: an API key from the OS credential store.
+2. **Role**: what the provider does for the orchestrator.
+   - `Reasoner`: `generate(request) -> Stream<TextEvent>`; stateless; the caller sends the full history and instructions; one streamed text response (ChatGPT, later DeepSeek or others).
+   - `Executor`: `start(job) -> Run`; long-running, works inside a project directory, emits progress, may ask for approvals, can be cancelled, ends with an outcome (Claude Code).
+3. **Capabilities** (`ProviderInfo`): declared, not assumed — roles supported, auth kind, streaming, model discovery, whether sampling parameters or token limits are accepted, whether it can request approvals. The UI and orchestrator read these instead of hard-coding provider names.
+
+A **registry** maps provider IDs to adapters; configuration chooses which provider fills which role. All adapters map their native errors into one shared taxonomy (`not_signed_in`, `not_eligible`, `usage_limit`, `transient`, `unsupported`, `cancelled`, `failed`) so retry policy and UI messages are provider-independent. Details: `docs/system-design.md` §2.2.
+
+```mermaid
+flowchart LR
+    ORC[Orchestrator] --> REG[Provider registry]
+    REG --> R1[Reasoner: ChatGPT adapter]
+    REG --> R2[Reasoner: future DeepSeek adapter]
+    REG --> E1[Executor: Claude Code adapter]
+    R1 --> A1[Auth: OAuth+PKCE + token store]
+    R2 --> A2[Auth: API key]
+    E1 --> A3[Auth: CLI-owned login, status only]
+    R1 -. HTTPS SSE .-> X1[(api.openai.com/v1)]
+    E1 -. child process NDJSON .-> X2[(claude CLI)]
+```
+
+Recommended integration summary: ChatGPT via a self-implemented, small OAuth+PKCE and Responses-SSE client (subject to the licence/terms review, ADR-0008) behind the Reasoner role; Claude Code via a child process in headless stream-json mode behind the Executor role (ADR-0006).
 
 ## 7. Data flow
 
