@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MODEL_LABEL, modelChoice, type ClaudeModelChoice } from "../domain/types.ts";
 import type {
   Activity,
@@ -104,6 +104,7 @@ export function GuildPanel(props: {
   onPickProject: () => void;
   onSelectProject: (p: Project) => void;
   onRefreshContext: () => void;
+  extra?: ReactNode;
   authError: ProviderError | null;
 }) {
   const { state } = props;
@@ -120,6 +121,7 @@ export function GuildPanel(props: {
         onPick={props.onPickClaude}
         rate={state.rate}
       />
+      {props.extra}
       <section className="card">
         <h3>Project</h3>
         <p className="muted">Claude Code runs inside the folder you choose. Use a copy or a test folder if you are experimenting.</p>
@@ -354,6 +356,11 @@ export function TaskView(props: {
   autopilotChoice: boolean;
   onAutopilotChoice: (on: boolean) => void;
   onToggleAutopilot: (on: boolean) => void;
+  /** repository permission profile + trust (replaces the start button until the repository is trusted) */
+  permissionsNode?: ReactNode;
+  rememberNode?: ReactNode;
+  servicesNode?: ReactNode;
+  canStart: boolean;
   onGenerate: (note: string | null) => void;
   onStopReasoner: () => void;
   onApprove: (body: string) => void;
@@ -380,6 +387,7 @@ export function TaskView(props: {
         <span className={`pill s-${task.status}`}>{statusLabel(task.status)}</span>
       </div>
       <ContextBadge context={state.context} busy={state.contextBusy} />
+      {props.servicesNode}
       <details open={task.status === "draft"}>
         <summary>Your request</summary>
         <p className="pre">{task.description}</p>
@@ -438,6 +446,7 @@ export function TaskView(props: {
             <summary>Approved prompt</summary>
             <p className="pre">{detail.drafts.filter((d) => d.approved).at(-1)?.body ?? latest?.body}</p>
           </details>
+          {props.permissionsNode}
           <fieldset className="policy">
             <legend>What may Claude do?</legend>
             {(Object.keys(POLICY_TEXT) as Policy[]).map((p) => (
@@ -469,9 +478,10 @@ export function TaskView(props: {
               </span>
             </label>
           </fieldset>
+          {props.rememberNode}
           <div className="row">
-            <button className="btn btn-primary" onClick={props.onStart} disabled={!props.claudeReady}>
-              {props.claudeReady ? "Start Claude Code" : "Claude Code not ready (Guild tab)"}
+            <button className="btn btn-primary" onClick={props.onStart} disabled={!props.claudeReady || !props.canStart}>
+              {!props.canStart ? "Trust the repository first" : props.claudeReady ? "Start Claude Code" : "Claude Code not ready (Guild tab)"}
             </button>
           </div>
           <label className="field">
@@ -489,6 +499,13 @@ export function TaskView(props: {
             Revise with ChatGPT
           </button>
         </>
+      )}
+
+      {(task.status === "running" || task.status === "completed" || task.status === "failed" || task.status === "cancelled" || task.status === "accepted") && detail.drafts.some((d) => d.approved) && (
+        <details>
+          <summary>Approved prompt</summary>
+          <p className="pre">{detail.drafts.filter((d) => d.approved).at(-1)?.body}</p>
+        </details>
       )}
 
       {task.status === "running" && (
@@ -532,7 +549,7 @@ export function TaskView(props: {
             )}
             {lastExec && (
               <p className="muted small">
-                Policy: {POLICY_TEXT[lastExec.policy]?.name ?? lastExec.policy} · {lastExec.permissionMode === "autopilot" ? "Auto Pilot" : "asked every time"}
+                Policy: {POLICY_TEXT[lastExec.policy]?.name ?? lastExec.policy} · {lastExec.permissionMode === "autopilot" ? "Auto Pilot" : "asked every time"} · model {lastExec.model || "default"}
                 {lastExec.numTurns != null ? ` · ${lastExec.numTurns} turns` : ""}
                 {lastExec.exitCode != null ? ` · exit code ${lastExec.exitCode}` : ""}
               </p>
@@ -545,13 +562,16 @@ export function TaskView(props: {
               </button>
             </div>
           )}
+          {task.status === "accepted" && (
+            <button className="btn" onClick={props.onRetry}>
+              Re-run this quest with the same prompt
+            </button>
+          )}
           {task.status !== "accepted" && (
             <>
-              {(task.status === "failed" || task.status === "cancelled") && (
-                <button className="btn" onClick={props.onRetry}>
-                  Run the same prompt again
-                </button>
-              )}
+              <button className="btn" onClick={props.onRetry}>
+                Re-run this quest with the same prompt
+              </button>
               <label className="field">
                 Request changes
                 <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="What should be different? ChatGPT will revise the prompt." />
@@ -612,6 +632,10 @@ const ICON: Record<string, string> = {
   info: "ℹ",
 };
 
+const BROWSER = "mcp__claude-in-chrome__";
+const displayTitle = (a: Activity): string =>
+  a.title.startsWith(BROWSER) ? `Browser · ${a.title.slice(BROWSER.length).replace(/_/g, " ")}` : a.title.startsWith("Permission needed: " + BROWSER) ? `Permission needed: Browser · ${a.title.slice(("Permission needed: " + BROWSER).length)}` : a.title;
+
 export function ActivityFeed({ items, empty }: { items: Activity[]; empty: string }) {
   const end = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState<Set<number>>(new Set());
@@ -630,7 +654,7 @@ export function ActivityFeed({ items, empty }: { items: Activity[]; empty: strin
               {ICON[a.kind] ?? "·"}
             </span>
             <div className="ev-body">
-              <div className="ev-title">{a.title}</div>
+              <div className="ev-title">{displayTitle(a)}</div>
               {a.detail && (
                 <div className="ev-detail pre" onClick={() => long && setOpen((o) => new Set(o.has(a.seq) ? [...o].filter((x) => x !== a.seq) : [...o, a.seq]))}>
                   {long && !expanded ? `${a.detail.slice(0, 140)}…  (click to expand)` : a.detail}

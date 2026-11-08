@@ -383,3 +383,10 @@ Facts future sessions must not rediscover. Evidence and numbers: `docs/architect
 - Claude Code auto-allows some read-only commands itself (for example `node -v`); the approver only sees what the CLI chooses to ask about.
 - Research mode works with `--tools Read,Glob,Grep` plus the approver in read-only policy; `--disallowedTools` path rules are a second fence, redaction a third.
 - Open: Auto Pilot classifier is a conservative denylist, not a sandbox; no OS-level isolation; research cost/limits on very large repositories untested.
+
+## 19. Sprint 3 learned facts (2026-11-08)
+- `claude --chrome` works together with `--strict-mcp-config` in print mode: the init event lists `claude-in-chrome` (source `dynamic`) and its browser tools are available even when `--tools` restricts the built-in tools. Requires a direct claude.ai login and the extension; Claude Code registers the native-messaging host on first use (restart Chrome if it is not noticed).
+- Extension ID `fcoeoabgfenejglbffodgkkbkcdhcgfn`; official page `https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn` (code.claude.com/docs/en/chrome).
+- A finished Claude quest can leave dev servers running inside the quest's Job Object; they are services of the quest, not part of its execution state.
+- The plan-usage Responses endpoint is used with a text protocol for agent hand-off instead of function tools (not verified to be supported).
+- Open: Auto Pilot classifier is a denylist, not a sandbox; browser actions were verified only for availability and flag passing unless noted in `docs/plan.md`.

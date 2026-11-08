@@ -6,6 +6,10 @@ import type {
   ChatGptStatus,
   ChatMessage,
   Conversation,
+  ConvSummary,
+  QuestRow,
+  ServiceView,
+  PrefsView,
   ResearchView,
   ClaudeInfo,
   ContextInfo,
@@ -50,6 +54,12 @@ export interface UiState {
   /** Auto Pilot state of the open quest's running execution (scoped to that run only). */
   autopilot: boolean;
   conversation: Conversation | null;
+  convs: ConvSummary[];
+  /** ChatGPT asked Claude to investigate; the objective, while Claude works. */
+  chatResearching: string | null;
+  quests: QuestRow[];
+  services: ServiceView[];
+  prefs: PrefsView | null;
   chatMessages: ChatMessage[];
   chatStream: string;
   chatGeneration: number;
@@ -84,6 +94,11 @@ export const initialState: UiState = {
   currentTool: null,
   autopilot: false,
   conversation: null,
+  convs: [],
+  chatResearching: null,
+  quests: [],
+  services: [],
+  prefs: null,
   chatMessages: [],
   chatStream: "",
   chatGeneration: 0,
@@ -101,6 +116,7 @@ export type Action =
   | { type: "patch"; patch: Partial<UiState> }
   | { type: "select_task"; detail: TaskDetail }
   | { type: "generation_started"; generation: number }
+  | { type: "project_switched"; projectId: number | null }
   | { type: "chat_opened"; conversation: Conversation; messages: ChatMessage[]; research: ResearchView }
   | { type: "chat_sending"; message: ChatMessage; generation: number };
 
@@ -111,6 +127,12 @@ function withStatus(tasks: Task[], detail: TaskDetail | null, taskId: number, st
     tasks: tasks.map((t) => (t.id === taskId ? { ...t, status } : t)),
     detail: detail && detail.task.id === taskId ? { ...detail, task: { ...detail.task, status } } : detail,
   };
+}
+
+/** Appends a message unless its id is already there (events can repeat); replaces an optimistic local copy. */
+export function addMessage(list: ChatMessage[], m: ChatMessage): ChatMessage[] {
+  if (list.some((x) => x.id === m.id)) return list.map((x) => (x.id === m.id ? m : x));
+  return [...list.filter((x) => !(x.id < 0 && x.role === m.role && x.body === m.body)), m];
 }
 
 function addDraft(detail: TaskDetail | null, draft: Draft): TaskDetail | null {
@@ -138,8 +160,36 @@ export function reduce(s: UiState, a: Action): UiState {
       };
     case "generation_started":
       return { ...s, streamText: "", streaming: false, streamGeneration: a.generation, error: null };
+    case "project_switched":
+      // A repository is a workspace: nothing from the previous one may stay on screen.
+      return {
+        ...s,
+        currentProjectId: a.projectId,
+        selectedTaskId: null,
+        detail: null,
+        activity: [],
+        permissions: [],
+        currentTool: null,
+        autopilot: false,
+        tasks: [],
+        quests: [],
+        services: [],
+        prefs: null,
+        context: null,
+        conversation: null,
+        convs: [],
+        chatMessages: [],
+        chatStream: "",
+        chatStreaming: false,
+        chatResearching: null,
+        chatError: null,
+        research: null,
+        researchActivity: [],
+        error: null,
+        finalNote: null,
+      };
     case "chat_opened":
-      return { ...s, conversation: a.conversation, chatMessages: a.messages, research: a.research, chatStream: "", chatStreaming: false, chatError: null };
+      return { ...s, conversation: a.conversation, chatMessages: a.messages, research: a.research, chatStream: "", chatStreaming: false, chatResearching: null, chatError: null };
     case "chat_sending":
       return { ...s, chatMessages: [...s.chatMessages, a.message], chatGeneration: a.generation, chatStream: "", chatStreaming: true, chatError: null };
     case "event":
@@ -206,10 +256,20 @@ function reduceEvent(s: UiState, e: AppEvent): UiState {
       return { ...s, chatGeneration: e.generation, chatStreaming: true, chatStream: s.chatStream + e.text };
     case "chat_done":
       if (e.conversationId !== s.conversation?.id) return s;
-      return { ...s, chatStreaming: false, chatStream: "", chatMessages: s.chatMessages.some((m) => m.id === e.message.id) ? s.chatMessages : [...s.chatMessages, e.message] };
+      return { ...s, chatStreaming: false, chatStream: "", chatResearching: null, chatMessages: addMessage(s.chatMessages, e.message) };
+    case "chat_agent_message":
+      // an intermediate contribution (ChatGPT's preface, or Claude's findings): the turn is still running
+      if (e.conversationId !== s.conversation?.id) return s;
+      return { ...s, chatStream: "", chatResearching: e.message.role === "agent" ? null : s.chatResearching, chatMessages: addMessage(s.chatMessages, e.message) };
+    case "chat_researching":
+      return e.conversationId === s.conversation?.id ? { ...s, chatResearching: e.objective, chatStream: "" } : s;
+    case "chat_title":
+      return { ...s, convs: s.convs.map((c) => (c.id === e.conversationId ? { ...c, title: e.title } : c)), conversation: s.conversation?.id === e.conversationId ? { ...s.conversation, title: e.title } : s.conversation };
+    case "service_found":
+      return e.taskId === s.selectedTaskId && !s.services.some((x) => x.id === e.service.id) ? { ...s, services: [...s.services, { ...e.service, live: true }] } : s;
     case "chat_failed":
       if (e.conversationId !== s.conversation?.id || e.generation < s.chatGeneration) return s;
-      return { ...s, chatStreaming: false, chatStream: "", chatError: e.kind === "cancelled" ? null : { kind: e.kind, message: e.message } };
+      return { ...s, chatStreaming: false, chatStream: "", chatResearching: null, chatError: e.kind === "cancelled" ? null : { kind: e.kind, message: e.message } };
     case "research_activity":
       return s.conversation && e.projectId === s.conversation.projectId ? { ...s, researchActivity: [...s.researchActivity, e.activity].slice(-MAX_LIVE_ACTIVITY) } : s;
     case "research_finished":

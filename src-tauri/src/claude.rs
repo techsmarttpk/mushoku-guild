@@ -191,6 +191,8 @@ pub enum Policy {
     ReadOnly,
     AskEach,
     AcceptEdits,
+    /// Repository research: read tools plus read-only git, nothing else.
+    Research,
 }
 
 impl Policy {
@@ -205,6 +207,7 @@ impl Policy {
     fn tools(self) -> &'static str {
         match self {
             Policy::ReadOnly => "Read,Glob,Grep",
+            Policy::Research => "Read,Glob,Grep,Bash",
             _ => "Read,Glob,Grep,Edit,Write,Bash",
         }
     }
@@ -212,6 +215,12 @@ impl Policy {
 
 /// Builds the CLI arguments. Pure so the security-relevant flags can be tested.
 pub fn build_args(policy: Policy, mcp_config: &Path, model: &str, max_turns: u32) -> Vec<String> {
+    build_args_chrome(policy, mcp_config, model, max_turns, false)
+}
+
+/// `chrome` adds the official `--chrome` flag (Claude in Chrome). It stays compatible with `--strict-mcp-config`:
+/// Claude Code adds its own `claude-in-chrome` server as a dynamic source (verified on 2.1.319).
+pub fn build_args_chrome(policy: Policy, mcp_config: &Path, model: &str, max_turns: u32, chrome: bool) -> Vec<String> {
     let mut a: Vec<String> = [
         "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
         "--disable-slash-commands", "--strict-mcp-config", "--setting-sources", "project,local",
@@ -230,16 +239,20 @@ pub fn build_args(policy: Policy, mcp_config: &Path, model: &str, max_turns: u32
     }
     a.push("--max-turns".into());
     a.push(max_turns.to_string());
+    if chrome {
+        a.push("--chrome".into());
+    }
     a
 }
 
 /// Names Claude must not read during research, enforced by Claude Code itself (in addition to our redaction).
 pub const RESEARCH_DENY: &str = "Read(**/.env),Read(**/.env.*),Read(**/*.pem),Read(**/*.key),Read(**/*.p12),Read(**/*.pfx),Read(**/id_rsa*),Read(**/id_ed25519*),Read(**/*credential*),Read(**/*secret*),Read(**/.npmrc),Read(**/.netrc),Read(**/node_modules/**),Read(**/.git/**),Read(**/target/**),Read(**/dist/**)";
 
-/// Research is strictly read-only: only Read/Glob/Grep exist, anything else is denied by the approver, and
-/// secret-looking paths are blocked by deny rules.
+/// Research is strictly read-only: Read/Glob/Grep plus Bash that the approver only allows for read-only git
+/// commands (hardened before they run); every other request is denied, and secret-looking paths are blocked by
+/// deny rules.
 pub fn research_args(mcp_config: &Path, model: &str, max_turns: u32) -> Vec<String> {
-    let mut a = build_args(Policy::ReadOnly, mcp_config, model, max_turns);
+    let mut a = build_args(Policy::Research, mcp_config, model, max_turns);
     a.push("--disallowedTools".into());
     a.push(RESEARCH_DENY.into());
     a
@@ -255,6 +268,9 @@ pub struct Norm {
 
 fn summarize_input(tool: &str, input: &Value) -> String {
     let pick = |k: &str| input[k].as_str().map(String::from);
+    if tool.starts_with("mcp__claude-in-chrome__") {
+        return truncate(&format!("{} {}", crate::autopilot::browser_short(tool), input), 600);
+    }
     let s = match tool {
         "Bash" => pick("command"),
         "Read" | "Write" | "Edit" | "NotebookEdit" => pick("file_path"),
@@ -382,6 +398,22 @@ impl Job {
     pub fn assign(&self, process: std::os::windows::io::RawHandle) -> bool {
         unsafe { windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(self.0 as _, process as _) != 0 }
     }
+    /// Process ids currently inside the job (up to 256).
+    pub fn pids(&self) -> Vec<u32> {
+        use windows_sys::Win32::System::JobObjects::{JobObjectBasicProcessIdList, QueryInformationJobObject};
+        let mut buf = vec![0u8; 8 + 8 * 256];
+        let ok = unsafe { QueryInformationJobObject(self.0 as _, JobObjectBasicProcessIdList, buf.as_mut_ptr() as *mut _, buf.len() as u32, std::ptr::null_mut()) };
+        if ok == 0 {
+            return vec![];
+        }
+        let listed = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize;
+        (0..listed.min(256))
+            .map(|i| {
+                let o = 8 + i * 8;
+                u64::from_le_bytes(buf[o..o + 8].try_into().unwrap_or([0; 8])) as u32
+            })
+            .collect()
+    }
     pub fn terminate(&self) {
         unsafe {
             windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0 as _, 1);
@@ -415,6 +447,8 @@ struct Pending(Mutex<HashMap<String, Sender<Decision>>>);
 pub enum RunKind {
     Quest { task_id: i64, exec_id: i64 },
     Research { project_id: i64 },
+    /// A focused research request from the chat adviser; the result goes back through a channel, not to the report.
+    Probe { project_id: i64 },
 }
 
 /// Messages from the three watchers of one process (stdout reader, exit waiter) to its supervisor.
@@ -426,6 +460,14 @@ pub enum RunMsg {
     StreamEnd,
     /// The process exited with this code (-1 when unknown).
     Exit(i32),
+}
+
+#[derive(Debug, Clone)]
+pub struct ProbeResult {
+    pub status: String,
+    pub text: String,
+    pub files: Vec<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -531,6 +573,8 @@ struct RunCtx {
     inspected: Mutex<Vec<String>>,
     /// Guards the single terminal event of this run.
     finished: AtomicBool,
+    probe_tx: Mutex<Option<Sender<ProbeResult>>>,
+    services: Arc<crate::services::Registry>,
 }
 
 impl RunCtx {
@@ -542,7 +586,19 @@ impl RunCtx {
                 self.db.add_event(exec_id, seq, kind, title, detail);
                 emit(&self.app, AppEvent::RunActivity { task_id, activity });
             }
-            RunKind::Research { project_id } => emit(&self.app, AppEvent::ResearchActivity { project_id, activity }),
+            RunKind::Research { project_id } | RunKind::Probe { project_id } => emit(&self.app, AppEvent::ResearchActivity { project_id, activity }),
+        }
+    }
+
+    /// A local URL printed by a tool (for example a dev server banner) becomes an "Open in browser" action.
+    fn found_url(&self, url: &str) {
+        let RunKind::Quest { task_id, .. } = self.kind else { return };
+        if self.db.has_url_service(task_id, url) {
+            return;
+        }
+        let id = self.db.add_service(task_id, "url", url, Some(url), None);
+        if let Some(service) = self.db.service(id) {
+            emit(&self.app, AppEvent::ServiceFound { task_id, service });
         }
     }
 
@@ -566,6 +622,10 @@ pub struct StartRequest {
     pub model: String,
     pub max_turns: u32,
     pub data_dir: PathBuf,
+    /// Pass the official `--chrome` flag (quests only).
+    pub chrome: bool,
+    pub services: Arc<crate::services::Registry>,
+    pub probe_tx: Option<Sender<ProbeResult>>,
 }
 
 fn random_hex(n: usize) -> String {
@@ -597,6 +657,7 @@ impl Runner {
         let run_id = match req.kind {
             RunKind::Quest { exec_id, .. } => format!("q{exec_id}"),
             RunKind::Research { project_id } => format!("r{project_id}"),
+            RunKind::Probe { project_id } => format!("p{project_id}"),
         };
         let cfg_path = req.data_dir.join(format!("run-{run_id}.mcp.json"));
         let self_exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -607,8 +668,8 @@ impl Runner {
         std::fs::write(&cfg_path, cfg.to_string()).map_err(|e| e.to_string())?;
 
         let args = match req.kind {
-            RunKind::Quest { .. } => build_args(req.policy, &cfg_path, &req.model, req.max_turns),
-            RunKind::Research { .. } => research_args(&cfg_path, &req.model, req.max_turns),
+            RunKind::Quest { .. } => build_args_chrome(req.policy, &cfg_path, &req.model, req.max_turns, req.chrome),
+            RunKind::Research { .. } | RunKind::Probe { .. } => research_args(&cfg_path, &req.model, req.max_turns),
         };
         let mut cmd = Command::new(&req.exe);
         cmd.args(&args).current_dir(&req.project_dir).env_clear().envs(clean_env_pairs()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -640,6 +701,7 @@ impl Runner {
         let exited = Arc::new(AtomicBool::new(false));
         let pending = Arc::new(Pending::default());
         let autopilot = Arc::new(AtomicBool::new(req.autopilot && matches!(req.kind, RunKind::Quest { .. })));
+        let kill_claude = Arc::new(AtomicBool::new(false));
         let ctx = Arc::new(RunCtx {
             app: req.app.clone(),
             db: req.db.clone(),
@@ -649,6 +711,8 @@ impl Runner {
             autopilot: autopilot.clone(),
             inspected: Mutex::new(Vec::new()),
             finished: AtomicBool::new(false),
+            probe_tx: Mutex::new(req.probe_tx),
+            services: req.services.clone(),
         });
         *slot = Some(Active { kind: req.kind, stdin: stdin.clone(), cancel: cancel.clone(), exited: exited.clone(), pending: pending.clone(), job: job.clone(), pid, autopilot: autopilot.clone(), ctx: ctx.clone() });
         drop(slot);
@@ -658,6 +722,9 @@ impl Runner {
         }
         if let RunKind::Quest { task_id, exec_id } = req.kind {
             emit(&req.app, AppEvent::RunStarted { task_id, execution_id: exec_id, autopilot: autopilot.load(Ordering::SeqCst) });
+            if req.chrome {
+                ctx.push("info", "Claude in Chrome is enabled", "Claude may use your browser (official integration). Browser actions still ask for permission, and the extension keeps its own site permissions.");
+            }
             if autopilot.load(Ordering::SeqCst) {
                 ctx.push("info", "Auto Pilot is ON for this quest", "Routine Bash commands are approved automatically. Risky commands and everything else still ask. Cancel any time.");
             }
@@ -666,7 +733,7 @@ impl Runner {
         // approval server
         let stop = Arc::new(AtomicBool::new(false));
         {
-            let (ctx, pending, token, stop, policy) = (ctx.clone(), pending.clone(), token.clone(), stop.clone(), if matches!(req.kind, RunKind::Research { .. }) { Policy::ReadOnly } else { req.policy });
+            let (ctx, pending, token, stop, policy) = (ctx.clone(), pending.clone(), token.clone(), stop.clone(), if matches!(req.kind, RunKind::Research { .. } | RunKind::Probe { .. }) { Policy::Research } else { req.policy });
             std::thread::spawn(move || serve_approvals(listener, ctx, pending, token, stop, policy));
         }
         // stderr tail
@@ -694,9 +761,22 @@ impl Runner {
             std::thread::spawn(move || read_stream(stdout, ctx, stdin, tx));
         }
         {
-            let (exited, tx) = (exited.clone(), tx);
+            let (exited, tx, kill_claude) = (exited.clone(), tx, kill_claude.clone());
             std::thread::spawn(move || {
-                let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
+                // Poll instead of blocking in wait(): lets the supervisor stop ONLY claude.exe (not the dev servers
+                // it started, which a finished quest may leave running).
+                let code = loop {
+                    match child.try_wait() {
+                        Ok(Some(st)) => break st.code().unwrap_or(-1),
+                        Ok(None) => {
+                            if kill_claude.load(Ordering::SeqCst) {
+                                let _ = child.kill();
+                            }
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        Err(_) => break -1,
+                    }
+                };
                 exited.store(true, Ordering::SeqCst);
                 let _ = tx.send(RunMsg::Exit(code));
             });
@@ -709,19 +789,49 @@ impl Runner {
                 &rx,
                 SOFT_GRACE,
                 || *s_stdin.lock().unwrap_or_else(|p| p.into_inner()) = None, // closing stdin lets the CLI exit
-                || match s_job.as_ref() {
-                    Some(j) => j.terminate(),
-                    None => kill_tree(pid),
+                || {
+                    // The CLI ignored the stdin close (a background tool keeps it alive): stop claude.exe itself.
+                    kill_claude.store(true, Ordering::SeqCst);
                 },
             );
-            if let Some(j) = job.as_ref() {
-                j.terminate(); // sweep anything the tool calls left behind (e.g. background servers)
+            let _ = &s_job;
+            // What is still running inside the quest's job now belongs to the quest's services, not to Claude.
+            let was_cancelled = cancel.load(Ordering::SeqCst);
+            let completed = final_status(was_cancelled, resolved.result.as_ref()).0 == "completed";
+            let mut kept = false;
+            if let (RunKind::Quest { task_id, .. }, Some(j)) = (ctx.kind, job.as_ref()) {
+                if completed {
+                    let leftovers: Vec<(u32, String)> = j
+                        .pids()
+                        .into_iter()
+                        .filter(|p| *p != pid)
+                        .filter_map(|p| crate::services::process_name(p).map(|n| (p, n)))
+                        .filter(|(_, n)| !matches!(n.to_ascii_lowercase().as_str(), "conhost.exe" | "bash.exe" | "sh.exe" | "openconsole.exe"))
+                        .collect();
+                    if !leftovers.is_empty() {
+                        for (p, n) in &leftovers {
+                            let id = ctx.db.add_service(task_id, "process", &format!("{n} (pid {p})"), None, Some(*p as i64));
+                            if let Some(service) = ctx.db.service(id) {
+                                emit(&ctx.app, AppEvent::ServiceFound { task_id, service });
+                            }
+                        }
+                        ctx.services.keep(task_id, job.clone());
+                        kept = true;
+                    }
+                }
+            }
+            if !kept {
+                if let Some(j) = job.as_ref() {
+                    j.terminate(); // nothing worth keeping: sweep whatever the tool calls left behind
+                } else {
+                    kill_tree(pid);
+                }
             }
             stop.store(true, Ordering::SeqCst);
             pending.deny_all("run ended");
             let _ = std::fs::remove_file(&cfg_path);
             let tail = err_tail.lock().unwrap_or_else(|p| p.into_inner()).trim().to_string();
-            finish_run(&ctx, &resolved, cancel.load(Ordering::SeqCst), &tail);
+            finish_run(&ctx, &resolved, was_cancelled, &tail);
             *me.active.lock().unwrap_or_else(|p| p.into_inner()) = None;
         });
         Ok(())
@@ -788,7 +898,7 @@ impl Runner {
 
     pub fn active_research(&self) -> Option<i64> {
         match self.active.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|a| a.kind) {
-            Some(RunKind::Research { project_id }) => Some(project_id),
+            Some(RunKind::Research { project_id }) | Some(RunKind::Probe { project_id }) => Some(project_id),
             _ => None,
         }
     }
@@ -832,12 +942,13 @@ fn finish_run(ctx: &RunCtx, resolved: &Resolved, was_cancelled: bool, stderr_tai
     }
     let result_text = resolved.result.as_ref().and_then(|r| r["result"].as_str()).map(String::from);
     let turns = resolved.result.as_ref().and_then(|r| r["num_turns"].as_i64());
-    let title = match (status, ctx.kind) {
-        ("completed", RunKind::Research { .. }) => "Research completed",
-        ("completed", _) => "Execution completed",
-        ("cancelled", RunKind::Research { .. }) => "Research cancelled",
-        ("cancelled", _) => "Execution cancelled",
-        (_, RunKind::Research { .. }) => "Research failed",
+    let research_like = matches!(ctx.kind, RunKind::Research { .. } | RunKind::Probe { .. });
+    let title = match (status, research_like) {
+        ("completed", true) => "Research completed",
+        ("completed", false) => "Execution completed",
+        ("cancelled", true) => "Research cancelled",
+        ("cancelled", false) => "Execution cancelled",
+        (_, true) => "Research failed",
         _ => "Execution failed",
     };
     let exit = resolved.exit_code.map(|c| format!("exit code {c}")).unwrap_or_else(|| "exit code unknown".into());
@@ -845,10 +956,22 @@ fn finish_run(ctx: &RunCtx, resolved: &Resolved, was_cancelled: bool, stderr_tai
     ctx.push(if status == "completed" { "result" } else if status == "cancelled" { "cancelled" } else { "error" }, title, detail.trim());
     match ctx.kind {
         RunKind::Quest { task_id, exec_id } => {
+            if status == "completed" {
+                for u in crate::services::detect_urls(result_text.as_deref().unwrap_or("")) {
+                    ctx.found_url(&u);
+                }
+            }
             ctx.db.finish_execution(exec_id, status, result_text.as_deref(), turns, resolved.denials, note.as_deref(), resolved.exit_code.map(i64::from));
             let _ = ctx.db.set_status(task_id, status);
             emit(&ctx.app, AppEvent::TaskStatus { task_id, status: status.into() });
             emit(&ctx.app, AppEvent::RunFinished { task_id, execution_id: exec_id, status: status.into(), result: result_text, note, exit_code: resolved.exit_code });
+        }
+        RunKind::Probe { .. } => {
+            let files = ctx.inspected.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let text = crate::project_context::redact(result_text.as_deref().unwrap_or(""));
+            if let Some(tx) = ctx.probe_tx.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                let _ = tx.send(ProbeResult { status: status.to_string(), text, files, note });
+            }
         }
         RunKind::Research { project_id } => {
             let files = ctx.inspected.lock().unwrap_or_else(|p| p.into_inner()).clone();
@@ -903,6 +1026,11 @@ fn read_stream(stdout: std::process::ChildStdout, ctx: Arc<RunCtx>, stdin: Arc<M
                         ctx.note_inspected(&n.detail);
                     }
                     ctx.push(n.kind, &n.title, &n.detail);
+                    if matches!(n.kind, "tool_result" | "assistant_text") {
+                        for u in crate::services::detect_local_urls(&n.detail) {
+                            ctx.found_url(&u);
+                        }
+                    }
                 }
             }
         }
@@ -944,13 +1072,28 @@ fn handle_approval(mut s: TcpStream, ctx: Arc<RunCtx>, pending: Arc<Pending>, to
     let summary = summarize_input(&tool, &input);
     let exec_id = match ctx.kind {
         RunKind::Quest { exec_id, .. } => Some(exec_id),
-        RunKind::Research { .. } => None,
+        _ => None,
     };
     let record = |decision: &str, by: &str| {
         if let Some(e) = exec_id {
             ctx.db.add_approval(e, &tool, &summary, decision, by);
         }
     };
+    if policy == Policy::Research {
+        // Read-only research: Bash only for read-only git, hardened so repository config cannot run anything.
+        if tool == "Bash" {
+            if let Some(hardened) = crate::autopilot::harden_readonly_git(input["command"].as_str().unwrap_or("")) {
+                let mut updated = input.clone();
+                updated["command"] = Value::String(hardened);
+                ctx.push("permission_auto", "Read-only git allowed", &summary);
+                reply(&mut s, true, &updated, "");
+                return;
+            }
+        }
+        ctx.push("permission_decision", &format!("Blocked (research is read-only): {tool}"), &summary);
+        reply(&mut s, false, &input, "Denied: this is a read-only research run.");
+        return;
+    }
     if policy == Policy::ReadOnly {
         record("deny", "policy");
         ctx.push("permission_decision", &format!("Blocked by read-only policy: {tool}"), &summary);
@@ -969,8 +1112,18 @@ fn handle_approval(mut s: TcpStream, ctx: Arc<RunCtx>, pending: Arc<Pending>, to
             return;
         }
     }
-    // Auto Pilot: only ordinary Bash commands, only while ON for this quest, never anything the classifier doubts.
+    // Browser tools (Claude in Chrome) are never covered by shell Auto Pilot; only plainly read-only ones may be.
     let mut reason: Option<String> = None;
+    if tool.starts_with("mcp__claude-in-chrome__") {
+        if ctx.autopilot.load(Ordering::SeqCst) && crate::autopilot::browser_read_only(&tool, &input) {
+            record("allow", "autopilot");
+            ctx.push("permission_auto", &format!("Auto-approved (read-only browser): {}", crate::autopilot::browser_short(&tool)), &summary);
+            reply(&mut s, true, &input, "");
+            return;
+        }
+        reason = Some("Browser actions always ask: Auto Pilot only covers shell commands and read-only browsing.".into());
+    }
+    // Auto Pilot: only ordinary Bash commands, only while ON for this quest, never anything the classifier doubts.
     if ctx.autopilot.load(Ordering::SeqCst) && tool == "Bash" {
         match crate::autopilot::classify(input["command"].as_str().unwrap_or(""), &ctx.project_dir) {
             crate::autopilot::Verdict::Safe => {
@@ -1076,7 +1229,7 @@ mod tests {
     fn research_mode_is_read_only_and_blocks_secret_paths() {
         let a = research_args(Path::new("c"), "sonnet", 40);
         let tools = a.iter().position(|x| x == "--tools").map(|i| a[i + 1].clone()).unwrap();
-        assert_eq!(tools, "Read,Glob,Grep", "no Bash, Edit or Write tool may exist in research");
+        assert_eq!(tools, "Read,Glob,Grep,Bash", "no Edit or Write tool exists; Bash is gated by the approver to read-only git");
         assert!(!a.iter().any(|x| x.contains("dangerously") || x == "acceptEdits" || x == "--permission-mode"));
         let deny = a.iter().position(|x| x == "--disallowedTools").map(|i| a[i + 1].clone()).unwrap();
         for p in [".env", "*.pem", "id_rsa", "node_modules", ".git"] {

@@ -22,3 +22,12 @@ test("inline code, bold, italic; links become plain text and HTML stays inert te
   assert.deepEqual(parseInline("[docs](https://example.com)"), [{ t: "text", s: "docs (https://example.com)" }]);
   assert.deepEqual(parseInline("<img src=x onerror=alert(1)>"), [{ t: "text", s: "<img src=x onerror=alert(1)>" }]);
 });
+
+test("tables become structured data with their header and rows", () => {
+  const b = parseMarkdown("Intro\n\n| Name | Role |\n|------|:----:|\n| `a` | **first** |\n| b | second |\n\nafter");
+  assert.deepEqual(b.map((x) => x.k), ["p", "table", "p"]);
+  const t = b[1] as { head: unknown[]; rows: unknown[][] };
+  assert.equal(t.head.length, 2);
+  assert.equal(t.rows.length, 2);
+  assert.equal(parseMarkdown("a | b\nnot a table").some((x) => x.k === "table"), false);
+});

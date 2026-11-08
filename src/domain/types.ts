@@ -33,6 +33,7 @@ export interface Project {
   path: string;
   name: string;
   lastUsedAt: number;
+  identity: string;
 }
 
 export interface Task {
@@ -69,6 +70,7 @@ export interface Execution {
   note: string | null;
   exitCode: number | null;
   permissionMode: "ask" | "autopilot";
+  model: string;
 }
 
 export interface Activity {
@@ -130,6 +132,10 @@ export type AppEvent =
   | { type: "chat_delta"; conversationId: number; generation: number; text: string }
   | { type: "chat_done"; conversationId: number; generation: number; message: ChatMessage }
   | { type: "chat_failed"; conversationId: number; generation: number; kind: ErrorKind; message: string }
+  | { type: "chat_researching"; conversationId: number; generation: number; objective: string }
+  | { type: "chat_agent_message"; conversationId: number; generation: number; message: ChatMessage }
+  | { type: "chat_title"; conversationId: number; title: string }
+  | { type: "service_found"; taskId: number; service: ServiceRow }
   | { type: "research_activity"; projectId: number; activity: Activity }
   | { type: "research_finished"; projectId: number; research: { projectId: number; status: string; report: string; files: string[]; researchedAt: number; note: string | null } }
   | { type: "claude_rate"; fiveHour: number | null; sevenDay: number | null; status: string | null };
@@ -158,9 +164,11 @@ export function modelChoice(setting: string | undefined): ClaudeModelChoice {
 export interface ChatMessage {
   id: number;
   conversationId: number;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "agent";
   body: string;
   createdAt: number;
+  kind: "text" | "agent" | "doc";
+  status: "complete" | "streaming" | "interrupted";
 }
 
 export interface Conversation {
@@ -183,4 +191,71 @@ export interface ChatOpen {
   conversation: Conversation;
   messages: ChatMessage[];
   research: ResearchView;
+}
+
+export interface ConvSummary {
+  id: number;
+  title: string;
+  updatedAt: number;
+  messageCount: number;
+  snippet: string;
+}
+
+export interface QuestRow {
+  id: number;
+  title: string;
+  status: TaskStatus;
+  createdAt: number;
+  updatedAt: number;
+  model: string;
+  permissionMode: string;
+  summary: string;
+}
+
+export interface ServiceRow {
+  id: number;
+  taskId: number;
+  kind: "url" | "process";
+  label: string;
+  url: string | null;
+  pid: number | null;
+  status: string;
+  createdAt: number;
+}
+export type ServiceView = ServiceRow & { live: boolean };
+
+export interface BrowserStatus {
+  enabled: boolean;
+  cliSupported: boolean;
+  extensionInstalled: boolean;
+  nativeHostRegistered: boolean;
+  chromeRunning: boolean;
+  chromePath: string | null;
+  state: "disabled" | "unsupported" | "extension_missing" | "chrome_not_running" | "ready";
+  message: string;
+}
+
+export type TrustState = "untrusted" | "trusted" | "reconfirm";
+export interface PrefsView {
+  projectId: number;
+  trust: TrustState;
+  policy: Policy;
+  autopilot: boolean;
+  trustedAt: number | null;
+  identity: string;
+  folderExists: boolean;
+}
+
+export interface LibraryMeta {
+  path: string;
+  title: string;
+  size: number;
+  modified: number;
+}
+export interface DocContent {
+  path: string;
+  title: string;
+  modified: number;
+  content: string;
+  truncated: boolean;
 }

@@ -1,7 +1,9 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { highlight } from "../domain/highlight.ts";
 import { parseMarkdown, type Block, type Inline } from "../domain/markdown.ts";
 import type { UiState } from "../domain/store.ts";
-import type { ResearchView } from "../domain/types.ts";
+import type { ChatMessage, ConvSummary, Project, ResearchView } from "../domain/types.ts";
+import { RepoTag } from "./Extras.tsx";
 import { ErrorNote } from "./panels.tsx";
 
 function Inlines({ items }: { items: Inline[] }) {
@@ -29,7 +31,26 @@ function BlockView({ b }: { b: Block }) {
     case "p":
       return <p><Inlines items={b.inline} /></p>;
     case "code":
-      return <pre className="code md-code" data-lang={b.lang || undefined}>{b.text}</pre>;
+      return (
+        <pre className="code md-code" data-lang={b.lang || undefined}>
+          {highlight(b.text, b.lang).map((t, i) => (t.t === "txt" ? <Fragment key={i}>{t.s}</Fragment> : <span key={i} className={`tok-${t.t}`}>{t.s}</span>))}
+        </pre>
+      );
+    case "table":
+      return (
+        <div className="md-table">
+          <table>
+            <thead>
+              <tr>{b.head.map((h, i) => <th key={i}><Inlines items={h} /></th>)}</tr>
+            </thead>
+            <tbody>
+              {b.rows.map((r, i) => (
+                <tr key={i}>{r.map((c, j) => <td key={j}><Inlines items={c} /></td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
     case "ul":
       return <ul>{b.items.map((it, i) => <li key={i}><Inlines items={it} /></li>)}</ul>;
     case "ol":
@@ -69,112 +90,217 @@ export function researchAge(at: number | null, now = Date.now()): string {
   return h < 48 ? `${h} h ago` : new Date(at).toLocaleDateString();
 }
 
+function Rail(props: {
+  convs: ConvSummary[];
+  selectedId: number | null;
+  query: string;
+  busy: boolean;
+  onQuery: (q: string) => void;
+  onOpen: (id: number) => void;
+  onNew: () => void;
+  onRename: (id: number, title: string) => void;
+  onDelete: (id: number) => void;
+}) {
+  const [renaming, setRenaming] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const [confirm, setConfirm] = useState<number | null>(null);
+  return (
+    <aside className="rail" aria-label="Conversations">
+      <button className="btn btn-primary" onClick={props.onNew} disabled={props.busy}>
+        + New conversation
+      </button>
+      <input type="search" placeholder="Search conversations…" value={props.query} onChange={(e) => props.onQuery(e.target.value)} aria-label="Search conversations" />
+      <ul className="list rail-list">
+        {props.convs.map((c) => (
+          <li key={c.id}>
+            {renaming === c.id ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (draft.trim()) props.onRename(c.id, draft.trim());
+                  setRenaming(null);
+                }}
+              >
+                <input autoFocus value={draft} maxLength={80} onChange={(e) => setDraft(e.target.value)} onBlur={() => setRenaming(null)} aria-label="Conversation title" />
+              </form>
+            ) : (
+              <div className={`conv ${c.id === props.selectedId ? "on" : ""}`}>
+                <button className="conv-main" onClick={() => props.onOpen(c.id)} aria-current={c.id === props.selectedId}>
+                  <span className="conv-title">{c.title}</span>
+                  <small className="muted">
+                    {c.messageCount} msg · {researchAge(c.updatedAt)}
+                  </small>
+                  {c.snippet && <small className="muted conv-snip">…{c.snippet}</small>}
+                </button>
+                {confirm === c.id ? (
+                  <div className="conv-confirm">
+                    <span>Delete?</span>
+                    <button className="link" onClick={() => { props.onDelete(c.id); setConfirm(null); }}>
+                      yes
+                    </button>
+                    <button className="link" onClick={() => setConfirm(null)}>
+                      no
+                    </button>
+                  </div>
+                ) : (
+                  <div className="conv-actions">
+                    <button className="link" title="Rename" onClick={() => { setDraft(c.title); setRenaming(c.id); }}>
+                      rename
+                    </button>
+                    <button className="link" title="Delete" onClick={() => setConfirm(c.id)}>
+                      delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </li>
+        ))}
+        {props.convs.length === 0 && <li className="muted small">{props.query ? "No match." : "No conversations yet."}</li>}
+      </ul>
+    </aside>
+  );
+}
+
+function MessageView({ m }: { m: ChatMessage }) {
+  if (m.kind === "doc") {
+    const path = /File: (.+)/.exec(m.body)?.[1] ?? "document";
+    return <div className="msg msg-doc">📖 Attached document <code>{path}</code> (its text is part of this conversation)</div>;
+  }
+  const who = m.role === "user" ? "You" : m.role === "agent" ? "Claude · repository research" : "ChatGPT";
+  return (
+    <div className={`msg msg-${m.role}`}>
+      <div className="msg-who">
+        {who}
+        {m.status === "interrupted" && <span className="tag"> interrupted</span>}
+        <small className="muted"> · {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>
+      </div>
+      {m.role === "user" ? <p className="pre">{m.body}</p> : <Markdown text={m.body} />}
+    </div>
+  );
+}
+
 export function ChatPanel(props: {
   state: UiState;
-  projectName: string | null;
+  project: Project | null;
   connected: boolean;
   claudeReady: boolean;
+  query: string;
+  onQuery: (q: string) => void;
   onSend: (text: string) => void;
   onStop: () => void;
   onNew: () => void;
+  onOpenConv: (id: number) => void;
+  onRename: (id: number, title: string) => void;
+  onDelete: (id: number) => void;
   onResearch: () => void;
   onCancelResearch: () => void;
 }) {
-  const { state } = props;
+  const { state, project } = props;
   const [text, setText] = useState("");
   const end = useRef<HTMLDivElement>(null);
   const research = state.research;
   const researching = research?.status === "researching";
-  const canSend = props.connected && !!state.conversation && !state.chatStreaming && text.trim().length > 0;
+  const busyTurn = state.chatStreaming || state.chatResearching !== null;
+  const canSend = props.connected && !!state.conversation && !busyTurn && text.trim().length > 0;
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
-  }, [state.chatMessages.length, state.chatStream]);
+  }, [state.chatMessages.length, state.chatStream, state.chatResearching]);
 
-  if (!props.projectName) return <div className="note">Choose a project folder in the Guild tab first.</div>;
+  if (!project) {
+    return (
+      <div className="stack">
+        <div className="note">Connect a project folder in the Guild tab to start a project-specific conversation. Every repository keeps its own conversations.</div>
+      </div>
+    );
+  }
   const send = (): void => {
     if (!canSend) return;
     props.onSend(text.trim());
     setText("");
   };
+  const lastActivity = state.researchActivity.at(-1);
 
   return (
-    <div className="chat">
-      <div className="chat-head">
-        <h3>Chat · {props.projectName}</h3>
-        <button className="btn btn-quiet" onClick={props.onNew} disabled={state.chatStreaming}>
-          New conversation
-        </button>
-      </div>
-      <div className="ctx-bar">
-        <span className={`ctx-pill r-${research?.status ?? "none"}`}>● {STATUS_TEXT[research?.status ?? "none"]}</span>
-        {research?.researchedAt && <span className="muted small">researched {researchAge(research.researchedAt)}</span>}
-        {researching ? (
-          <button className="btn btn-quiet" onClick={props.onCancelResearch}>
-            Stop research
-          </button>
-        ) : (
-          <button className="btn btn-primary" onClick={props.onResearch} disabled={!props.claudeReady || state.chatStreaming} title="Claude Code reads the repository (read-only) and reports back to ChatGPT">
-            {research && research.status !== "none" ? "Refresh research" : "Ask Claude for Context"}
-          </button>
+    <div className="chat-wrap">
+      <Rail convs={state.convs} selectedId={state.conversation?.id ?? null} query={props.query} busy={busyTurn} onQuery={props.onQuery} onOpen={props.onOpenConv} onNew={props.onNew} onRename={props.onRename} onDelete={props.onDelete} />
+      <div className="chat">
+        <div className="chat-head">
+          <h3 title={state.conversation?.title}>{state.conversation?.title ?? "Chat"}</h3>
+          <RepoTag project={project} />
+        </div>
+        <div className="ctx-bar">
+          <span className={`ctx-pill r-${research?.status ?? "none"}`}>● {STATUS_TEXT[research?.status ?? "none"]}</span>
+          {research?.researchedAt && <span className="muted small">researched {researchAge(research.researchedAt)}</span>}
+          {researching ? (
+            <button className="btn btn-quiet" onClick={props.onCancelResearch}>
+              Stop research
+            </button>
+          ) : (
+            <button className="btn" onClick={props.onResearch} disabled={!props.claudeReady || busyTurn} title="Optional: have Claude Code read the whole repository and write a full report. ChatGPT also asks Claude on its own when a question needs it.">
+              {research && research.status !== "none" ? "Refresh research" : "Ask Claude for Context"}
+            </button>
+          )}
+        </div>
+        {research?.note && research.status !== "ready" && <div className="note">{research.note}</div>}
+        {research && research.report && (
+          <details className="research-box">
+            <summary>Repository report ({research.files.length} files inspected)</summary>
+            <Markdown text={research.report} />
+            {research.files.length > 0 && <p className="muted small">Files read: {research.files.slice(0, 60).join(", ")}</p>}
+          </details>
         )}
-      </div>
-      {research?.note && research.status !== "ready" && <div className="note">{research.note}</div>}
-      {!props.claudeReady && <div className="muted small">Claude Code is not ready (Guild tab), so research is unavailable.</div>}
-      {research && research.report && (
-        <details className="research-box">
-          <summary>
-            Repository research ({research.files.length} files inspected)
-          </summary>
-          <Markdown text={research.report} />
-          {research.files.length > 0 && <p className="muted small">Files read: {research.files.slice(0, 60).join(", ")}</p>}
-        </details>
-      )}
 
-      <div className="chat-log" aria-live="polite">
-        {state.chatMessages.length === 0 && !state.chatStreaming && (
-          <div className="muted pad">
-            Ask anything about {props.projectName}: its architecture, what to build next, why something works the way it does. ChatGPT only knows the project profile
-            and Claude's research, never your files directly. For a real opinion, press <strong>Ask Claude for Context</strong> first.
-          </div>
-        )}
-        {state.chatMessages.map((m) => (
-          <div key={m.id} className={`msg msg-${m.role}`}>
-            <div className="msg-who">{m.role === "user" ? "You" : "ChatGPT"}</div>
-            {m.role === "user" ? <p className="pre">{m.body}</p> : <Markdown text={m.body} />}
-          </div>
-        ))}
-        {state.chatStreaming && (
-          <div className="msg msg-assistant">
-            <div className="msg-who">ChatGPT {state.chatStream ? "is writing…" : "is thinking…"}</div>
-            {state.chatStream ? <Markdown text={state.chatStream} /> : <span className="muted">…</span>}
-          </div>
-        )}
-        <div ref={end} />
-      </div>
-      <ErrorNote error={state.chatError} />
-      <div className="chat-input">
-        <textarea
-          rows={3}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          placeholder={props.connected ? "Message ChatGPT… (Enter to send, Shift+Enter for a new line)" : "Connect ChatGPT in the Guild tab to chat"}
-          disabled={!props.connected}
-        />
-        {state.chatStreaming ? (
-          <button className="btn btn-quiet" onClick={props.onStop}>
-            Stop
-          </button>
-        ) : (
-          <button className="btn btn-primary" onClick={send} disabled={!canSend}>
-            Send
-          </button>
-        )}
+        <div className="chat-log" aria-live="polite">
+          {state.chatMessages.length === 0 && !busyTurn && (
+            <div className="muted pad">
+              Talk to ChatGPT about {project.name}: architecture, what to build next, why something works the way it does. ChatGPT decides by itself when it needs evidence and then asks Claude to read the relevant code (read-only), so you do not have to. Simple questions are answered directly.
+            </div>
+          )}
+          {state.chatMessages.map((m) => (
+            <MessageView key={m.id} m={m} />
+          ))}
+          {state.chatResearching !== null && (
+            <div className="msg msg-agent msg-live">
+              <div className="msg-who">Claude · researching…</div>
+              <p className="pre">{state.chatResearching}</p>
+              {lastActivity && <p className="muted small">{lastActivity.title}: {lastActivity.detail.slice(0, 100)}</p>}
+              <p className="muted small">Read-only: Claude can read and search files and look at Git history. It cannot change anything.</p>
+            </div>
+          )}
+          {state.chatStreaming && state.chatResearching === null && (
+            <div className="msg msg-assistant">
+              <div className="msg-who">ChatGPT {state.chatStream ? "is writing…" : "is thinking…"}</div>
+              {state.chatStream ? <Markdown text={state.chatStream} /> : <span className="muted">…</span>}
+            </div>
+          )}
+          <div ref={end} />
+        </div>
+        <ErrorNote error={state.chatError} />
+        <div className="chat-input">
+          <textarea
+            rows={3}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder={props.connected ? "Message ChatGPT… (Enter to send, Shift+Enter for a new line)" : "Connect ChatGPT in the Guild tab to chat"}
+            disabled={!props.connected}
+          />
+          {busyTurn ? (
+            <button className="btn btn-quiet" onClick={props.onStop}>
+              Stop
+            </button>
+          ) : (
+            <button className="btn btn-primary" onClick={send} disabled={!canSend}>
+              Send
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -109,7 +109,7 @@ fn redactors() -> &'static Vec<(Regex, &'static str)> {
             mk(r"\bxox[baprs]-[A-Za-z0-9-]{10,}", "[REDACTED TOKEN]"),
             mk(r"://[^/\s:@]+:[^/\s@]+@", "://[REDACTED]@"),
             mk(
-                r#"(?i)\b(api[_-]?key|secret|token|passw(?:or)?d|pwd|authorization|private[_-]?key|client[_-]?secret|access[_-]?key)(["']?\s*[:=]\s*)(["']?)[^\s"',;]{4,}"#,
+                r#"(?i)\b([a-z0-9_.-]*(?:api[_-]?key|secret|token|passw(?:or)?d|pwd|authorization|private[_-]?key|access[_-]?key)[a-z0-9_.-]*)(["']?\s*[:=]\s*)(["']?)[^\s"',;]{4,}"#,
                 "$1$2$3[REDACTED]",
             ),
         ]

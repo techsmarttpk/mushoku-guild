@@ -1,5 +1,10 @@
 mod approver;
 mod autopilot;
+mod browser;
+mod chat;
+mod library;
+mod repo;
+mod services;
 mod chatgpt;
 mod claude;
 mod commands;
@@ -22,7 +27,9 @@ static MINIMIZED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "dev-seed")]
 fn dev_seed(db: &db::Db) {
     let (Ok(dir), Ok(prompt)) = (std::env::var("MUSHOKU_DEV_SEED_PROJECT"), std::env::var("MUSHOKU_DEV_SEED_PROMPT")) else { return };
-    let Ok(project) = db.add_project(&dir, "dev-seed-project") else { return };
+    let identity = repo::identity_of(std::path::Path::new(&dir));
+    let Ok(project) = db.add_project_with_identity(&dir, "dev-seed-project", &identity) else { return };
+    let _ = db.save_repo_prefs(project.id, true, "ask_each", false, &identity, &dir);
     let Ok(task) = db.create_task(project.id, "Seeded test quest", &prompt) else { return };
     for st in ["reasoning", "prompt_ready", "approved"] {
         let _ = db.set_status(task.id, st);
@@ -48,7 +55,17 @@ pub fn run() {
             db.recover_interrupted();
             #[cfg(feature = "dev-seed")]
             dev_seed(&db);
-            app.manage(commands::AppState::new(db, dir));
+            let state = commands::AppState::new(db, dir);
+            let db = state.db.clone();
+            std::thread::spawn(move || {
+                // projects created before identities existed get one (Git root commit, else normalised path)
+                for p in db.projects().into_iter().filter(|p| p.identity.is_empty()) {
+                    if std::path::Path::new(&p.path).is_dir() {
+                        db.set_identity(p.id, &repo::identity_of(std::path::Path::new(&p.path)));
+                    }
+                }
+            });
+            app.manage(state);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -90,6 +107,25 @@ pub fn run() {
             commands::chat_new,
             commands::chat_send,
             commands::chat_cancel,
+            commands::chat_list,
+            commands::chat_open_conv,
+            commands::chat_rename,
+            commands::chat_delete,
+            commands::library_list,
+            commands::library_read,
+            commands::library_ask,
+            commands::repo_prefs_get,
+            commands::repo_prefs_save,
+            commands::repo_prefs_revoke,
+            commands::project_relink,
+            commands::quest_history,
+            commands::browser_status,
+            commands::browser_install_extension,
+            commands::browser_open_chrome,
+            commands::services_get,
+            commands::service_open,
+            commands::service_stop,
+            commands::service_focus,
             commands::permission_decide
         ])
         .build(tauri::generate_context!())
@@ -98,6 +134,7 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event {
             if let Some(state) = handle.try_state::<commands::AppState>() {
                 state.runner.shutdown(); // nothing may outlive the app
+                state.services.stop_all();
             }
         }
     });

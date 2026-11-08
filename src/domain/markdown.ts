@@ -8,6 +8,7 @@ export type Block =
   | { k: "code"; lang: string; text: string }
   | { k: "ul" | "ol"; items: Inline[][] }
   | { k: "quote"; inline: Inline[] }
+  | { k: "table"; head: Inline[][]; rows: Inline[][][] }
   | { k: "hr" };
 
 export function parseInline(src: string): Inline[] {
@@ -27,6 +28,12 @@ export function parseInline(src: string): Inline[] {
   return out;
 }
 
+const cells = (line: string): string[] => {
+  const t = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return t.split("|").map((c) => c.trim());
+};
+const isSeparator = (line: string): boolean => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line) && line.includes("-");
+
 export function parseMarkdown(src: string): Block[] {
   const lines = src.replace(/\r\n/g, "\n").split("\n");
   const blocks: Block[] = [];
@@ -44,6 +51,19 @@ export function parseMarkdown(src: string): Block[] {
       i++;
       while (i < lines.length && !/^\s*```\s*$/.test(lines[i] ?? "")) body.push(lines[i++] ?? "");
       blocks.push({ k: "code", lang: fence[1] ?? "", text: body.join("\n") });
+      continue;
+    }
+    if (line.includes("|") && i + 1 < lines.length && isSeparator(lines[i + 1] ?? "") && cells(line).length > 1) {
+      flush();
+      const head = cells(line).map(parseInline);
+      const rows: Inline[][][] = [];
+      i += 2;
+      while (i < lines.length && (lines[i] ?? "").includes("|") && (lines[i] ?? "").trim() !== "") {
+        rows.push(cells(lines[i] ?? "").map(parseInline));
+        i++;
+      }
+      i--;
+      blocks.push({ k: "table", head, rows });
       continue;
     }
     const h = /^(#{1,4})\s+(.*)$/.exec(line);

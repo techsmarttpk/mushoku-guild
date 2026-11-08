@@ -68,5 +68,8 @@ export async function connect(port = 9222, timeoutMs = 30000) {
   const type = (selector, value) =>
     evaluate(`(() => { const el=document.querySelector(${JSON.stringify(selector)}); if(!el) return false; const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto,'value').set.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input',{bubbles:true})); return true; })()`);
   await send("Runtime.enable");
-  return { errors, send, evaluate, screenshot, click, waitFor, type, close: () => ws.close() };
+  const mouse = async (x, y, type = 'click') => {
+    for (const t of type === 'click' ? ['mouseMoved', 'mousePressed', 'mouseReleased'] : ['mouseMoved']) await send('Input.dispatchMouseEvent', { type: t, x, y, button: 'left', clickCount: 1 });
+  };
+  return { mouse, errors, send, evaluate, screenshot, click, waitFor, type, close: () => ws.close() };
 }

@@ -97,6 +97,61 @@ fn escapes_project(cmd: &str, project: &Path) -> bool {
     cmd.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ';' | '&' | '|' | '(' | ')' | '=')).any(|t| t == ".." || t.starts_with("../") || t.starts_with("..\\") || t.contains("/../") || t.contains("\\..\\") || t.ends_with("/..") || t.ends_with("\\.."))
 }
 
+/// `mcp__claude-in-chrome__computer` -> `computer`
+pub fn browser_short(tool: &str) -> &str {
+    tool.rsplit("__").next().unwrap_or(tool)
+}
+
+/// Browser tools that only observe. Everything else (navigate, click, type, forms, JavaScript, uploads, tabs
+/// creation, recordings) is never auto-approved, whatever the shell Auto Pilot setting is.
+pub fn browser_read_only(tool: &str, input: &serde_json::Value) -> bool {
+    match browser_short(tool) {
+        "read_page" | "get_page_text" | "find" | "read_console_messages" | "read_network_requests" | "list_connected_browsers" | "shortcuts_list" => true,
+        "tabs_context_mcp" => input["createIfEmpty"].as_bool() != Some(true),
+        "computer" => matches!(input["action"].as_str(), Some("screenshot") | Some("scroll") | Some("zoom")),
+        _ => false,
+    }
+}
+
+/// Read-only git for research. Returns the command with repository-controlled execution disabled, or None.
+/// Only plain `git <verb> <args>` without shell syntax; verbs that can write or run configured programs are refused.
+pub fn harden_readonly_git(command: &str) -> Option<String> {
+    let c = command.trim();
+    if c.is_empty() || c.len() > 400 || c.chars().any(|ch| matches!(ch, ';' | '&' | '|' | '<' | '>' | '`' | '$' | '\n' | '\r' | '(' | ')' | '{' | '}' | '"' | '\'' | '*' | '?')) {
+        return None;
+    }
+    let mut it = c.split_whitespace();
+    if it.next()? != "git" {
+        return None;
+    }
+    let verb = it.next()?;
+    if !matches!(verb, "status" | "log" | "diff" | "show" | "branch" | "blame" | "ls-files" | "rev-parse" | "shortlog" | "describe" | "ls-tree" | "cat-file" | "tag") {
+        return None;
+    }
+    let args: Vec<&str> = it.collect();
+    if args.iter().any(|a| a.starts_with('~')) {
+        return None;
+    }
+    for a in &args {
+        let l = a.to_ascii_lowercase();
+        let writes = l == "-o" || l.starts_with("--output") || l.starts_with("--ext-diff") || l == "-c" || l.starts_with("--exec") || l.starts_with("--upload-pack") || l.starts_with("--git-dir") || l.starts_with("--work-tree") || l.starts_with("--textconv") || l.starts_with("--open-files-in-pager") || l == "--pager" || l.starts_with("-d") && verb == "branch" || l.starts_with("--delete") || l.starts_with("--set-upstream") || l == "-m" || l == "-f" || l.starts_with("--force") || l.starts_with("--edit");
+        if writes || a.contains("..\\") {
+            return None;
+        }
+        if verb == "branch" && !(l.starts_with('-') && matches!(l.as_str(), "-a" | "-r" | "-v" | "-vv" | "--list" | "--all" | "--remotes" | "--show-current" | "--merged" | "--no-merged" | "--contains")) {
+            return None; // `git branch name` would create a branch
+        }
+        if verb == "tag" && !(l.starts_with('-') && matches!(l.as_str(), "-l" | "--list" | "--sort=-creatordate" | "-n")) {
+            return None;
+        }
+    }
+    let extra = match verb {
+        "diff" | "show" | "log" => " --no-ext-diff --no-textconv",
+        _ => "",
+    };
+    Some(format!("git -c core.fsmonitor=false -c core.pager=cat -c core.hooksPath=NUL --no-pager {verb}{extra}{}", args.iter().map(|a| format!(" {a}")).collect::<String>()))
+}
+
 /// True when `path` is an absolute path lexically inside `project` (no `..`, no other drive/root).
 /// Used to auto-approve edits under the "allow edits" policy without delegating to Claude's own acceptEdits mode
 /// (which would also silently allow rm/mv and similar shell commands).
@@ -226,6 +281,38 @@ mod tests {
         assert!(!path_inside(p(), "D:\\Projects\\demo\\..\\secret.txt"));
         assert!(!path_inside(p(), "C:\\Windows\\win.ini"));
         assert!(!path_inside(p(), "relative/path.txt"));
+    }
+
+    #[test]
+    fn browser_autopilot_never_covers_actions_only_reading() {
+        use serde_json::json;
+        for t in ["read_page", "get_page_text", "find", "read_console_messages", "read_network_requests"] {
+            assert!(browser_read_only(&format!("mcp__claude-in-chrome__{t}"), &json!({})), "{t}");
+        }
+        assert!(browser_read_only("mcp__claude-in-chrome__computer", &json!({"action": "screenshot"})));
+        for t in ["navigate", "form_input", "javascript_tool", "file_upload", "gif_creator", "tabs_create_mcp", "upload_image"] {
+            assert!(!browser_read_only(&format!("mcp__claude-in-chrome__{t}"), &json!({})), "{t}");
+        }
+        assert!(!browser_read_only("mcp__claude-in-chrome__computer", &json!({"action": "left_click"})));
+        assert!(!browser_read_only("mcp__claude-in-chrome__computer", &json!({"action": "type", "text": "x"})));
+        assert!(!browser_read_only("mcp__claude-in-chrome__tabs_context_mcp", &json!({"createIfEmpty": true})));
+    }
+
+    #[test]
+    fn research_may_run_only_read_only_git_and_it_is_hardened() {
+        let ok = harden_readonly_git("git log --oneline -n 20").unwrap();
+        assert!(ok.contains("core.fsmonitor=false") && ok.contains("--no-ext-diff") && ok.ends_with("--oneline -n 20"));
+        assert!(harden_readonly_git("git status").unwrap().contains("--no-pager status"));
+        for bad in [
+            "git push", "git commit -m x", "git checkout main", "git reset --hard", "git clean -fd", "git config user.name x", "git branch newbranch", "git branch -D x",
+            "git log; rm -rf .", "git log | sh", "git diff > out.txt", "git -c core.pager=sh log", "git log --output=x.txt", "git show $(whoami)", "ls", "npm test", "git",
+            "git diff --ext-diff", "git tag v1", "git log ..\\other",
+        ] {
+            assert!(harden_readonly_git(bad).is_none(), "must refuse: {bad}");
+        }
+        assert!(harden_readonly_git("git diff HEAD~1").is_some() && harden_readonly_git("git show HEAD^").is_some());
+        assert!(harden_readonly_git("git log ~/x").is_none());
+        assert!(harden_readonly_git("git branch -a").is_some() && harden_readonly_git("git blame src/main.rs").is_some());
     }
 
     #[test]

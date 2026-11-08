@@ -2,7 +2,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::db::{ChatMessage, Draft, Research};
+use crate::db::{ChatMessage, Draft, Research, ServiceRow};
 
 /// Error taxonomy shared by both providers.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -61,6 +61,10 @@ pub enum AppEvent {
     ChatFailed { conversation_id: i64, generation: u64, kind: ErrorKind, message: String },
     ResearchActivity { project_id: i64, activity: Activity },
     ResearchFinished { project_id: i64, research: Research },
+    ServiceFound { task_id: i64, service: ServiceRow },
+    ChatResearching { conversation_id: i64, generation: u64, objective: String },
+    ChatAgentMessage { conversation_id: i64, generation: u64, message: ChatMessage },
+    ChatTitle { conversation_id: i64, title: String },
     ClaudeRate { five_hour: Option<f64>, seven_day: Option<f64>, status: Option<String> },
 }
 

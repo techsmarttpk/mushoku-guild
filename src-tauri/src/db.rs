@@ -62,6 +62,27 @@ CREATE TABLE repo_research (
   project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
   status TEXT NOT NULL, report TEXT NOT NULL DEFAULT '', files TEXT NOT NULL DEFAULT '[]',
   researched_at INTEGER NOT NULL, fingerprint TEXT NOT NULL DEFAULT '', note TEXT);
+"#,
+r#"
+ALTER TABLE projects ADD COLUMN identity TEXT NOT NULL DEFAULT '';
+ALTER TABLE executions ADD COLUMN model TEXT NOT NULL DEFAULT '';
+ALTER TABLE chat_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'text';
+ALTER TABLE chat_messages ADD COLUMN status TEXT NOT NULL DEFAULT 'complete';
+CREATE TABLE repo_prefs (
+  project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  trusted INTEGER NOT NULL DEFAULT 0, policy TEXT NOT NULL DEFAULT 'ask_each', autopilot INTEGER NOT NULL DEFAULT 0,
+  trusted_identity TEXT NOT NULL DEFAULT '', trusted_path TEXT NOT NULL DEFAULT '', trusted_at INTEGER);
+CREATE TABLE research_sessions (
+  id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  objective TEXT NOT NULL, question TEXT NOT NULL, status TEXT NOT NULL, findings TEXT NOT NULL DEFAULT '',
+  files TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL);
+CREATE TABLE services (
+  id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, label TEXT NOT NULL, url TEXT, pid INTEGER, status TEXT NOT NULL,
+  created_at INTEGER NOT NULL, ended_at INTEGER);
+CREATE TABLE library_docs (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, path TEXT NOT NULL, title TEXT NOT NULL,
+  size INTEGER NOT NULL, modified INTEGER NOT NULL, seen_at INTEGER NOT NULL, PRIMARY KEY (project_id, path));
 "#];
 
 /// Task lifecycle. `from -> to` pairs not listed here are rejected.
@@ -80,6 +101,8 @@ pub fn transition_allowed(from: &str, to: &str) -> bool {
             | ("running", "cancelled")
             | ("completed", "accepted")
             | ("completed", "reasoning")
+            | ("completed", "approved")
+            | ("accepted", "approved")
             | ("failed", "reasoning")
             | ("failed", "approved")
             | ("cancelled", "reasoning")
@@ -94,6 +117,7 @@ pub struct Project {
     pub path: String,
     pub name: String,
     pub last_used_at: i64,
+    pub identity: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -136,6 +160,7 @@ pub struct Execution {
     pub note: Option<String>,
     pub exit_code: Option<i64>,
     pub permission_mode: String,
+    pub model: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -165,6 +190,10 @@ pub struct ChatMessage {
     pub role: String,
     pub body: String,
     pub created_at: i64,
+    /// text | agent (Claude's findings) | doc (an attached document)
+    pub kind: String,
+    /// complete | streaming | interrupted
+    pub status: String,
 }
 
 /// Claude's repository research for one project (read-only; stored locally, redacted).
@@ -179,6 +208,62 @@ pub struct Research {
     pub researched_at: i64,
     pub fingerprint: String,
     pub note: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoPrefsRow {
+    pub trusted: bool,
+    pub policy: String,
+    pub autopilot: bool,
+    pub trusted_identity: String,
+    pub trusted_path: String,
+    pub trusted_at: Option<i64>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvSummary {
+    pub id: i64,
+    pub title: String,
+    pub updated_at: i64,
+    pub message_count: i64,
+    pub snippet: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestRow {
+    pub id: i64,
+    pub title: String,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub model: String,
+    pub permission_mode: String,
+    pub summary: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceRow {
+    pub id: i64,
+    pub task_id: i64,
+    pub kind: String,
+    pub label: String,
+    pub url: Option<String>,
+    pub pid: Option<i64>,
+    pub status: String,
+    pub created_at: i64,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryMeta {
+    pub path: String,
+    pub title: String,
+    pub size: i64,
+    pub modified: i64,
 }
 
 #[derive(Serialize)]
@@ -272,24 +357,44 @@ impl Db {
     }
 
     // ---- projects
+    #[cfg(test)]
     pub fn add_project(&self, path: &str, name: &str) -> Result<Project, String> {
+        self.add_project_with_identity(path, name, "")
+    }
+    pub fn add_project_with_identity(&self, path: &str, name: &str, identity: &str) -> Result<Project, String> {
         let now = now_ms();
         let c = self.c();
         c.execute(
-            "INSERT INTO projects(path,name,created_at,last_used_at) VALUES(?1,?2,?3,?3)
-             ON CONFLICT(path) DO UPDATE SET last_used_at=excluded.last_used_at",
-            params![path, name, now],
+            "INSERT INTO projects(path,name,created_at,last_used_at,identity) VALUES(?1,?2,?3,?3,?4)
+             ON CONFLICT(path) DO UPDATE SET last_used_at=excluded.last_used_at, identity=CASE WHEN excluded.identity<>'' THEN excluded.identity ELSE projects.identity END",
+            params![path, name, now, identity],
         )
         .map_err(|e| e.to_string())?;
-        c.query_row("SELECT id,path,name,last_used_at FROM projects WHERE path=?1", [path], project_row).map_err(|e| e.to_string())
+        c.query_row("SELECT id,path,name,last_used_at,identity FROM projects WHERE path=?1", [path], project_row).map_err(|e| e.to_string())
     }
     pub fn projects(&self) -> Vec<Project> {
         let c = self.c();
-        let mut st = c.prepare("SELECT id,path,name,last_used_at FROM projects ORDER BY last_used_at DESC").expect("sql");
+        let mut st = c.prepare("SELECT id,path,name,last_used_at,identity FROM projects ORDER BY last_used_at DESC").expect("sql");
         st.query_map([], project_row).map(|r| r.filter_map(Result::ok).collect()).unwrap_or_default()
     }
     pub fn project(&self, id: i64) -> Option<Project> {
-        self.c().query_row("SELECT id,path,name,last_used_at FROM projects WHERE id=?1", [id], project_row).optional().ok().flatten()
+        self.c().query_row("SELECT id,path,name,last_used_at,identity FROM projects WHERE id=?1", [id], project_row).optional().ok().flatten()
+    }
+    /// A repository found again (moved or renamed): keep every record, point it at the new folder.
+    pub fn relink_project(&self, id: i64, path: &str, name: &str, identity: &str) -> Result<(), String> {
+        self.c()
+            .execute("UPDATE projects SET path=?2, name=?3, identity=?4, last_used_at=?5 WHERE id=?1", params![id, path, name, identity, now_ms()])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    pub fn set_identity(&self, id: i64, identity: &str) {
+        let _ = self.c().execute("UPDATE projects SET identity=?2 WHERE id=?1", params![id, identity]);
+    }
+    pub fn project_by_identity(&self, identity: &str) -> Option<Project> {
+        if identity.is_empty() {
+            return None;
+        }
+        self.c().query_row("SELECT id,path,name,last_used_at,identity FROM projects WHERE identity=?1 ORDER BY id LIMIT 1", [identity], project_row).optional().ok().flatten()
     }
     pub fn touch_project(&self, id: i64) {
         let _ = self.c().execute("UPDATE projects SET last_used_at=?2 WHERE id=?1", params![id, now_ms()]);
@@ -365,11 +470,11 @@ impl Db {
     }
 
     // ---- executions, events, approvals
-    pub fn start_execution(&self, task_id: i64, draft_id: i64, policy: &str, permission_mode: &str) -> Result<i64, String> {
+    pub fn start_execution(&self, task_id: i64, draft_id: i64, policy: &str, permission_mode: &str, model: &str) -> Result<i64, String> {
         let c = self.c();
         c.execute(
-            "INSERT INTO executions(task_id,prompt_draft_id,policy,status,started_at,permission_mode) VALUES(?1,?2,?3,'running',?4,?5)",
-            params![task_id, draft_id, policy, now_ms(), permission_mode],
+            "INSERT INTO executions(task_id,prompt_draft_id,policy,status,started_at,permission_mode,model) VALUES(?1,?2,?3,'running',?4,?5,?6)",
+            params![task_id, draft_id, policy, now_ms(), permission_mode, model],
         )
         .map_err(|e| e.to_string())?;
         Ok(c.last_insert_rowid())
@@ -408,7 +513,7 @@ impl Db {
     pub fn executions(&self, task_id: i64) -> Vec<Execution> {
         let c = self.c();
         let mut st = c
-            .prepare("SELECT id,task_id,policy,status,started_at,ended_at,result_text,num_turns,denial_count,note,exit_code,permission_mode FROM executions WHERE task_id=?1 ORDER BY id")
+            .prepare("SELECT id,task_id,policy,status,started_at,ended_at,result_text,num_turns,denial_count,note,exit_code,permission_mode,model FROM executions WHERE task_id=?1 ORDER BY id")
             .expect("sql");
         st.query_map([task_id], |r| {
             Ok(Execution {
@@ -424,6 +529,7 @@ impl Db {
                 note: r.get(9)?,
                 exit_code: r.get(10)?,
                 permission_mode: r.get(11)?,
+                model: r.get(12)?,
             })
         })
         .map(|r| r.filter_map(Result::ok).collect())
@@ -461,7 +567,7 @@ impl Db {
     }
     pub fn chat_messages(&self, conversation_id: i64) -> Vec<ChatMessage> {
         let c = self.c();
-        let mut st = c.prepare("SELECT id,conversation_id,role,body,created_at FROM chat_messages WHERE conversation_id=?1 ORDER BY id").expect("sql");
+        let mut st = c.prepare("SELECT id,conversation_id,role,body,created_at,kind,status FROM chat_messages WHERE conversation_id=?1 ORDER BY id").expect("sql");
         st.query_map([conversation_id], msg_row).map(|r| r.filter_map(Result::ok).collect()).unwrap_or_default()
     }
     pub fn add_chat_message(&self, conversation_id: i64, role: &str, body: &str) -> Result<ChatMessage, String> {
@@ -469,12 +575,8 @@ impl Db {
         let c = self.c();
         c.execute("INSERT INTO chat_messages(conversation_id,role,body,created_at) VALUES(?1,?2,?3,?4)", params![conversation_id, role, body, now]).map_err(|e| e.to_string())?;
         let id = c.last_insert_rowid();
-        // the first user message names the conversation
-        let _ = c.execute(
-            "UPDATE chat_conversations SET updated_at=?2, title=CASE WHEN title='New conversation' AND ?3='user' THEN substr(?4,1,60) ELSE title END WHERE id=?1",
-            params![conversation_id, now, role, body],
-        );
-        c.query_row("SELECT id,conversation_id,role,body,created_at FROM chat_messages WHERE id=?1", [id], msg_row).map_err(|e| e.to_string())
+        let _ = c.execute("UPDATE chat_conversations SET updated_at=?2 WHERE id=?1", params![conversation_id, now]);
+        c.query_row("SELECT id,conversation_id,role,body,created_at,kind,status FROM chat_messages WHERE id=?1", [id], msg_row).map_err(|e| e.to_string())
     }
 
     // ---- repository research
@@ -518,6 +620,138 @@ impl Db {
         );
     }
 
+    // ---- per-repository permission preferences
+    pub fn repo_prefs(&self, project_id: i64) -> Option<RepoPrefsRow> {
+        self.c()
+            .query_row("SELECT trusted,policy,autopilot,trusted_identity,trusted_path,trusted_at FROM repo_prefs WHERE project_id=?1", [project_id], |r| {
+                Ok(RepoPrefsRow { trusted: r.get::<_, i64>(0)? != 0, policy: r.get(1)?, autopilot: r.get::<_, i64>(2)? != 0, trusted_identity: r.get(3)?, trusted_path: r.get(4)?, trusted_at: r.get(5)? })
+            })
+            .optional()
+            .ok()
+            .flatten()
+    }
+    pub fn save_repo_prefs(&self, project_id: i64, trusted: bool, policy: &str, autopilot: bool, identity: &str, path: &str) -> Result<(), String> {
+        self.c()
+            .execute(
+                "INSERT INTO repo_prefs(project_id,trusted,policy,autopilot,trusted_identity,trusted_path,trusted_at) VALUES(?1,?2,?3,?4,?5,?6,?7)
+                 ON CONFLICT(project_id) DO UPDATE SET trusted=?2, policy=?3, autopilot=?4, trusted_identity=?5, trusted_path=?6, trusted_at=?7",
+                params![project_id, trusted as i64, policy, autopilot as i64, identity, path, if trusted { Some(now_ms()) } else { None }],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    pub fn revoke_repo_prefs(&self, project_id: i64) {
+        let _ = self.c().execute("DELETE FROM repo_prefs WHERE project_id=?1", [project_id]);
+    }
+
+    // ---- quest history
+    pub fn quest_history(&self, project_id: i64) -> Vec<QuestRow> {
+        let c = self.c();
+        let mut st = c
+            .prepare(
+                "SELECT t.id, t.title, t.status, t.created_at, t.updated_at,
+                        COALESCE((SELECT e.model FROM executions e WHERE e.task_id=t.id ORDER BY e.id DESC LIMIT 1), ''),
+                        COALESCE((SELECT e.permission_mode FROM executions e WHERE e.task_id=t.id ORDER BY e.id DESC LIMIT 1), ''),
+                        COALESCE((SELECT substr(COALESCE(e.result_text, e.note, ''), 1, 160) FROM executions e WHERE e.task_id=t.id ORDER BY e.id DESC LIMIT 1), '')
+                 FROM tasks t WHERE t.project_id=?1 ORDER BY t.updated_at DESC LIMIT 300",
+            )
+            .expect("sql");
+        st.query_map([project_id], |r| {
+            Ok(QuestRow { id: r.get(0)?, title: r.get(1)?, status: r.get(2)?, created_at: r.get(3)?, updated_at: r.get(4)?, model: r.get(5)?, permission_mode: r.get(6)?, summary: r.get(7)? })
+        })
+        .map(|r| r.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+    }
+
+    // ---- chat conversation management
+    pub fn conversations(&self, project_id: i64, query: &str) -> Vec<ConvSummary> {
+        let c = self.c();
+        let like = format!("%{}%", query.trim().replace('%', "").replace('_', ""));
+        let mut st = c
+            .prepare(
+                "SELECT c.id, c.title, c.updated_at, (SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id=c.id AND m.kind<>'doc'),
+                        COALESCE((SELECT substr(m.body,1,120) FROM chat_messages m WHERE m.conversation_id=c.id AND m.kind<>'doc' AND ?3<>'' AND m.body LIKE ?2 ORDER BY m.id LIMIT 1), '')
+                 FROM chat_conversations c
+                 WHERE c.project_id=?1 AND (?3='' OR c.title LIKE ?2 OR EXISTS (SELECT 1 FROM chat_messages m WHERE m.conversation_id=c.id AND m.body LIKE ?2))
+                   AND (EXISTS (SELECT 1 FROM chat_messages m WHERE m.conversation_id=c.id) OR c.id=(SELECT MAX(id) FROM chat_conversations WHERE project_id=?1))
+                 ORDER BY c.updated_at DESC, c.id DESC LIMIT 200",
+            )
+            .expect("sql");
+        st.query_map(params![project_id, like, query.trim()], |r| Ok(ConvSummary { id: r.get(0)?, title: r.get(1)?, updated_at: r.get(2)?, message_count: r.get(3)?, snippet: r.get(4)? }))
+            .map(|r| r.filter_map(Result::ok).collect())
+            .unwrap_or_default()
+    }
+    pub fn rename_conversation(&self, id: i64, title: &str) {
+        let _ = self.c().execute("UPDATE chat_conversations SET title=?2 WHERE id=?1", params![id, title]);
+    }
+    pub fn delete_conversation(&self, id: i64) {
+        let _ = self.c().execute("DELETE FROM chat_conversations WHERE id=?1", [id]);
+    }
+    pub fn add_chat_message_kind(&self, conversation_id: i64, role: &str, body: &str, kind: &str, status: &str) -> Result<ChatMessage, String> {
+        let now = now_ms();
+        let c = self.c();
+        c.execute("INSERT INTO chat_messages(conversation_id,role,body,created_at,kind,status) VALUES(?1,?2,?3,?4,?5,?6)", params![conversation_id, role, body, now, kind, status]).map_err(|e| e.to_string())?;
+        let id = c.last_insert_rowid();
+        let _ = c.execute("UPDATE chat_conversations SET updated_at=?2 WHERE id=?1", params![conversation_id, now]);
+        c.query_row("SELECT id,conversation_id,role,body,created_at,kind,status FROM chat_messages WHERE id=?1", [id], msg_row).map_err(|e| e.to_string())
+    }
+    pub fn update_chat_message(&self, id: i64, body: &str, status: &str) {
+        let _ = self.c().execute("UPDATE chat_messages SET body=?2, status=?3 WHERE id=?1", params![id, body, status]);
+    }
+    pub fn delete_chat_message(&self, id: i64) {
+        let _ = self.c().execute("DELETE FROM chat_messages WHERE id=?1", [id]);
+    }
+    pub fn chat_message(&self, id: i64) -> Option<ChatMessage> {
+        self.c().query_row("SELECT id,conversation_id,role,body,created_at,kind,status FROM chat_messages WHERE id=?1", [id], msg_row).optional().ok().flatten()
+    }
+    pub fn set_title_if_new(&self, id: i64, title: &str) {
+        let _ = self.c().execute("UPDATE chat_conversations SET title=?2 WHERE id=?1 AND title='New conversation'", params![id, title]);
+    }
+    pub fn add_research_session(&self, conversation_id: i64, objective: &str, question: &str, status: &str, findings: &str, files: &[String]) {
+        let _ = self.c().execute(
+            "INSERT INTO research_sessions(conversation_id,objective,question,status,findings,files,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![conversation_id, objective, question, status, findings, serde_json::to_string(files).unwrap_or_else(|_| "[]".into()), now_ms()],
+        );
+    }
+
+    // ---- launched services (dev servers, apps, URLs) belong to the quest, not to its execution lifecycle
+    pub fn add_service(&self, task_id: i64, kind: &str, label: &str, url: Option<&str>, pid: Option<i64>) -> i64 {
+        let c = self.c();
+        let _ = c.execute("INSERT INTO services(task_id,kind,label,url,pid,status,created_at) VALUES(?1,?2,?3,?4,?5,'running',?6)", params![task_id, kind, label, url, pid, now_ms()]);
+        c.last_insert_rowid()
+    }
+    pub fn has_url_service(&self, task_id: i64, url: &str) -> bool {
+        self.c().query_row("SELECT 1 FROM services WHERE task_id=?1 AND kind='url' AND url=?2", params![task_id, url], |_| Ok(())).optional().ok().flatten().is_some()
+    }
+    pub fn services(&self, task_id: i64) -> Vec<ServiceRow> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT id,task_id,kind,label,url,pid,status,created_at FROM services WHERE task_id=?1 ORDER BY id").expect("sql");
+        st.query_map([task_id], |r| Ok(ServiceRow { id: r.get(0)?, task_id: r.get(1)?, kind: r.get(2)?, label: r.get(3)?, url: r.get(4)?, pid: r.get(5)?, status: r.get(6)?, created_at: r.get(7)? }))
+            .map(|r| r.filter_map(Result::ok).collect())
+            .unwrap_or_default()
+    }
+    pub fn service(&self, id: i64) -> Option<ServiceRow> {
+        self.c()
+            .query_row("SELECT id,task_id,kind,label,url,pid,status,created_at FROM services WHERE id=?1", [id], |r| {
+                Ok(ServiceRow { id: r.get(0)?, task_id: r.get(1)?, kind: r.get(2)?, label: r.get(3)?, url: r.get(4)?, pid: r.get(5)?, status: r.get(6)?, created_at: r.get(7)? })
+            })
+            .optional()
+            .ok()
+            .flatten()
+    }
+    pub fn set_service_status(&self, id: i64, status: &str) {
+        let _ = self.c().execute("UPDATE services SET status=?2, ended_at=?3 WHERE id=?1", params![id, status, now_ms()]);
+    }
+
+    // ---- library metadata (documents are always read from disk; this only remembers what the shelves showed)
+    pub fn remember_library(&self, project_id: i64, docs: &[LibraryMeta]) {
+        let c = self.c();
+        let _ = c.execute("DELETE FROM library_docs WHERE project_id=?1", [project_id]);
+        for d in docs {
+            let _ = c.execute("INSERT OR REPLACE INTO library_docs(project_id,path,title,size,modified,seen_at) VALUES(?1,?2,?3,?4,?5,?6)", params![project_id, d.path, d.title, d.size, d.modified, now_ms()]);
+        }
+    }
+
     /// After a crash or forced exit: nothing can still be running, so reconcile stored state.
     pub fn recover_interrupted(&self) {
         let c = self.c();
@@ -526,6 +760,8 @@ impl Db {
             [now_ms()],
         );
         let _ = c.execute("UPDATE tasks SET status='failed' WHERE status='running'", []);
+        let _ = c.execute("UPDATE services SET status='ended', ended_at=?1 WHERE status='running'", [now_ms()]);
+        let _ = c.execute("UPDATE chat_messages SET status='interrupted' WHERE status='streaming'", []);
         let _ = c.execute("UPDATE repo_research SET status=CASE WHEN report='' THEN 'failed' ELSE 'ready' END, note='Interrupted: Mushoku Guild closed during research.' WHERE status='researching'", []);
         let _ = c.execute(
             "UPDATE tasks SET status=CASE WHEN EXISTS(SELECT 1 FROM prompt_drafts d WHERE d.task_id=tasks.id) THEN 'prompt_ready' ELSE 'draft' END WHERE status='reasoning'",
@@ -541,10 +777,10 @@ fn conv_row(r: &rusqlite::Row) -> rusqlite::Result<Conversation> {
     Ok(Conversation { id: r.get(0)?, project_id: r.get(1)?, title: r.get(2)?, updated_at: r.get(3)? })
 }
 fn msg_row(r: &rusqlite::Row) -> rusqlite::Result<ChatMessage> {
-    Ok(ChatMessage { id: r.get(0)?, conversation_id: r.get(1)?, role: r.get(2)?, body: r.get(3)?, created_at: r.get(4)? })
+    Ok(ChatMessage { id: r.get(0)?, conversation_id: r.get(1)?, role: r.get(2)?, body: r.get(3)?, created_at: r.get(4)?, kind: r.get(5)?, status: r.get(6)? })
 }
 fn project_row(r: &rusqlite::Row) -> rusqlite::Result<Project> {
-    Ok(Project { id: r.get(0)?, path: r.get(1)?, name: r.get(2)?, last_used_at: r.get(3)? })
+    Ok(Project { id: r.get(0)?, path: r.get(1)?, name: r.get(2)?, last_used_at: r.get(3)?, identity: r.get(4)? })
 }
 fn task_row(r: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task { id: r.get(0)?, project_id: r.get(1)?, title: r.get(2)?, description: r.get(3)?, status: r.get(4)?, created_at: r.get(5)?, updated_at: r.get(6)? })
@@ -588,7 +824,7 @@ mod tests {
         assert_eq!(d.version, 1);
         db.set_status(t.id, "prompt_ready").unwrap();
         db.set_status(t.id, "approved").unwrap();
-        let e = db.start_execution(t.id, d.id, "ask_each", "ask").unwrap();
+        let e = db.start_execution(t.id, d.id, "ask_each", "ask", "sonnet").unwrap();
         db.set_status(t.id, "running").unwrap();
         db.add_event(e, 1, "info", "hello", "");
         db.recover_interrupted();
@@ -603,7 +839,7 @@ mod tests {
         let p = db.add_project("C:\\x", "x").unwrap();
         let t = db.create_task(p.id, "t", "d").unwrap();
         let d = db.add_draft(t.id, "p", "user", None).unwrap();
-        let e = db.start_execution(t.id, d.id, "ask_each", "autopilot").unwrap();
+        let e = db.start_execution(t.id, d.id, "ask_each", "autopilot", "sonnet").unwrap();
         db.finish_execution(e, "completed", Some("ok"), Some(3), 0, None, Some(0));
         db.finish_execution(e, "failed", None, None, 0, Some("late duplicate"), Some(1));
         let ex = &db.executions(t.id)[0];
@@ -611,19 +847,98 @@ mod tests {
     }
 
     #[test]
-    fn chat_messages_persist_in_order_and_name_the_conversation() {
+    fn chat_messages_persist_in_order_with_kind_and_status() {
         let db = Db::open_in_memory();
         let p = db.add_project("C:\\x", "x").unwrap();
         assert!(db.latest_conversation(p.id).is_none());
         let c = db.create_conversation(p.id).unwrap();
         db.add_chat_message(c.id, "user", "Is this well architected?").unwrap();
-        db.add_chat_message(c.id, "assistant", "Let me look.").unwrap();
+        let a = db.add_chat_message_kind(c.id, "assistant", "", "text", "streaming").unwrap();
+        db.update_chat_message(a.id, "Let me look.", "streaming");
+        db.add_chat_message_kind(c.id, "agent", "findings", "agent", "complete").unwrap();
+        db.recover_interrupted();
         let msgs = db.chat_messages(c.id);
-        assert_eq!(msgs.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), ["user", "assistant"]);
-        assert_eq!(db.latest_conversation(p.id).unwrap().title, "Is this well architected?");
+        assert_eq!(msgs.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), ["user", "assistant", "agent"]);
+        assert_eq!((msgs[1].status.as_str(), msgs[1].body.as_str()), ("interrupted", "Let me look."), "a stream cut short keeps its partial text");
+        assert_eq!(msgs[2].kind, "agent");
         let c2 = db.create_conversation(p.id).unwrap();
         assert_eq!(db.latest_conversation(p.id).unwrap().id, c2.id);
-        assert_eq!(db.chat_messages(c.id).len(), 2, "the old conversation is kept");
+        assert_eq!(db.chat_messages(c.id).len(), 3, "the old conversation is kept");
+    }
+
+    #[test]
+    fn conversations_are_isolated_per_repository_searchable_renamable_and_deletable() {
+        let db = Db::open_in_memory();
+        let a = db.add_project("C:\\a", "a").unwrap();
+        let b = db.add_project("C:\\b", "b").unwrap();
+        let ca = db.create_conversation(a.id).unwrap();
+        db.add_chat_message(ca.id, "user", "How does authentication work?").unwrap();
+        db.add_chat_message(ca.id, "assistant", "It uses JWT tokens.").unwrap();
+        let cb = db.create_conversation(b.id).unwrap();
+        db.add_chat_message(cb.id, "user", "Payments question").unwrap();
+        assert_eq!(db.conversations(a.id, "").iter().map(|c| c.id).collect::<Vec<_>>(), vec![ca.id]);
+        assert_eq!(db.conversations(b.id, "").iter().map(|c| c.id).collect::<Vec<_>>(), vec![cb.id]);
+        assert_eq!(db.conversations(a.id, "jwt").len(), 1, "search finds message content");
+        assert_eq!(db.conversations(a.id, "payments").len(), 0, "search never crosses repositories");
+        db.rename_conversation(ca.id, "Auth deep dive");
+        assert_eq!(db.conversations(a.id, "deep dive")[0].title, "Auth deep dive");
+        db.delete_conversation(ca.id);
+        assert!(db.chat_messages(ca.id).is_empty());
+        assert_eq!(db.conversations(b.id, "").len(), 1);
+    }
+
+    #[test]
+    fn quest_history_is_scoped_to_the_repository_and_carries_model_mode_and_summary() {
+        let db = Db::open_in_memory();
+        let a = db.add_project("C:\\a", "a").unwrap();
+        let b = db.add_project("C:\\b", "b").unwrap();
+        let ta = db.create_task(a.id, "Fix login", "d").unwrap();
+        let tb = db.create_task(b.id, "Other repo quest", "d").unwrap();
+        let d = db.add_draft(ta.id, "p", "user", None).unwrap();
+        let e = db.start_execution(ta.id, d.id, "ask_each", "autopilot", "haiku").unwrap();
+        db.finish_execution(e, "completed", Some("Login fixed"), Some(2), 0, None, Some(0));
+        let ha = db.quest_history(a.id);
+        assert_eq!(ha.len(), 1);
+        assert_eq!((ha[0].title.as_str(), ha[0].model.as_str(), ha[0].permission_mode.as_str(), ha[0].summary.as_str()), ("Fix login", "haiku", "autopilot", "Login fixed"));
+        assert_eq!(db.quest_history(b.id)[0].id, tb.id);
+    }
+
+    #[test]
+    fn permission_preferences_persist_per_repository_and_can_be_revoked() {
+        let db = Db::open_in_memory();
+        let a = db.add_project("C:\\a", "a").unwrap();
+        let b = db.add_project("C:\\b", "b").unwrap();
+        assert!(db.repo_prefs(a.id).is_none());
+        db.save_repo_prefs(a.id, true, "accept_edits", false, "git:abc", "C:\\a").unwrap();
+        let p = db.repo_prefs(a.id).unwrap();
+        assert_eq!((p.trusted, p.policy.as_str(), p.trusted_identity.as_str()), (true, "accept_edits", "git:abc"));
+        assert!(db.repo_prefs(b.id).is_none(), "another repository inherits nothing");
+        db.revoke_repo_prefs(a.id);
+        assert!(db.repo_prefs(a.id).is_none());
+    }
+
+    #[test]
+    fn moved_repository_keeps_its_data_when_relinked_by_identity() {
+        let db = Db::open_in_memory();
+        let a = db.add_project_with_identity("C:\\old\\proj", "proj", "git:root1").unwrap();
+        let t = db.create_task(a.id, "t", "d").unwrap();
+        let found = db.project_by_identity("git:root1").unwrap();
+        db.relink_project(found.id, "D:\\new\\proj2", "proj2", "git:root1").unwrap();
+        let p = db.project(a.id).unwrap();
+        assert_eq!((p.path.as_str(), p.name.as_str()), ("D:\\new\\proj2", "proj2"));
+        assert_eq!(db.tasks(a.id)[0].id, t.id);
+        assert!(db.project_by_identity("").is_none());
+    }
+
+    #[test]
+    fn services_belong_to_the_quest_and_are_closed_after_a_restart() {
+        let db = Db::open_in_memory();
+        let p = db.add_project("C:\\a", "a").unwrap();
+        let t = db.create_task(p.id, "t", "d").unwrap();
+        let id = db.add_service(t.id, "url", "http://localhost:3000", Some("http://localhost:3000"), None);
+        assert!(db.has_url_service(t.id, "http://localhost:3000"));
+        db.recover_interrupted();
+        assert_eq!(db.service(id).unwrap().status, "ended");
     }
 
     #[test]

@@ -67,14 +67,14 @@ test("failed and cancelled outcomes are never shown as completed, even for a tas
 });
 
 test("reopening a running quest restores its Auto Pilot mode from the stored execution", () => {
-  const running: TaskDetail = { task: { ...task, status: "running" }, drafts: [], events: [], executions: [{ id: 1, taskId: 1, policy: "ask_each", status: "running", startedAt: 0, endedAt: null, resultText: null, numTurns: null, denialCount: 0, note: null, exitCode: null, permissionMode: "autopilot" }] };
+  const running: TaskDetail = { task: { ...task, status: "running" }, drafts: [], events: [], executions: [{ id: 1, taskId: 1, policy: "ask_each", status: "running", startedAt: 0, endedAt: null, resultText: null, numTurns: null, denialCount: 0, note: null, exitCode: null, permissionMode: "autopilot", model: "sonnet" }] };
   assert.equal(reduce(initialState, { type: "select_task", detail: running }).autopilot, true);
   assert.equal(reduce(initialState, { type: "select_task", detail: { ...running, task: { ...task, status: "completed" } } }).autopilot, false);
 });
 
 test("chat: messages persist in order, deltas stream into one reply and a stale generation is ignored", () => {
   const conv = { id: 5, projectId: 1, title: "t", updatedAt: 0 };
-  const user = { id: 1, conversationId: 5, role: "user" as const, body: "hi", createdAt: 0 };
+  const user = { id: 1, conversationId: 5, role: "user" as const, body: "hi", createdAt: 0, kind: "text" as const, status: "complete" as const };
   let s = reduce(initialState, { type: "chat_opened", conversation: conv, messages: [], research: { status: "none", researchedAt: null, files: [], report: "", note: null } });
   s = reduce(s, { type: "chat_sending", message: user, generation: 3 });
   s = ev(s, { type: "chat_delta", conversationId: 5, generation: 3, text: "Hel" });
@@ -82,7 +82,7 @@ test("chat: messages persist in order, deltas stream into one reply and a stale 
   s = ev(s, { type: "chat_delta", conversationId: 5, generation: 2, text: "STALE" });
   s = ev(s, { type: "chat_delta", conversationId: 6, generation: 3, text: "OTHER" });
   assert.equal(s.chatStream, "Hello");
-  const reply = { id: 2, conversationId: 5, role: "assistant" as const, body: "Hello", createdAt: 1 };
+  const reply = { id: 2, conversationId: 5, role: "assistant" as const, body: "Hello", createdAt: 1, kind: "text" as const, status: "complete" as const };
   s = ev(s, { type: "chat_done", conversationId: 5, generation: 3, message: reply });
   s = ev(s, { type: "chat_done", conversationId: 5, generation: 3, message: reply });
   assert.deepEqual(s.chatMessages.map((m) => m.body), ["hi", "Hello"]);
@@ -96,4 +96,36 @@ test("research events update the context status and keep the previous report on 
   assert.deepEqual([s.research?.status, s.research?.report, s.research?.researchedAt, s.research?.note], ["failed", "# R", 100, "boom"]);
   s = ev(s, { type: "research_finished", projectId: 1, research: { projectId: 1, status: "ready", report: "# New", files: ["b.ts"], researchedAt: 300, note: null } });
   assert.deepEqual([s.research?.status, s.research?.report, s.research?.researchedAt], ["ready", "# New", 300]);
+});
+
+test("switching repositories clears every workspace-scoped view so nothing leaks between them", () => {
+  const conv = { id: 5, projectId: 1, title: "t", updatedAt: 0 };
+  const msg = { id: 1, conversationId: 5, role: "user" as const, body: "secret of repo A", createdAt: 0, kind: "text" as const, status: "complete" as const };
+  let s = reduce({ ...initialState, currentProjectId: 1, tasks: [task] }, { type: "select_task", detail });
+  s = reduce(s, { type: "chat_opened", conversation: conv, messages: [msg], research: { status: "ready", researchedAt: 1, files: ["a"], report: "REPORT A", note: null } });
+  s = reduce(s, { type: "project_switched", projectId: 2 });
+  assert.equal(s.currentProjectId, 2);
+  assert.deepEqual([s.tasks.length, s.detail, s.conversation, s.chatMessages.length, s.research, s.quests.length, s.prefs, s.context], [0, null, null, 0, null, 0, null, null]);
+});
+
+test("a research request shows Claude working, then the findings join the conversation as an agent message", () => {
+  const conv = { id: 5, projectId: 1, title: "t", updatedAt: 0 };
+  let s = reduce(initialState, { type: "chat_opened", conversation: conv, messages: [], research: { status: "none", researchedAt: null, files: [], report: "", note: null } });
+  s = ev(s, { type: "chat_researching", conversationId: 5, generation: 1, objective: "auth flow" });
+  assert.equal(s.chatResearching, "auth flow");
+  const finding = { id: 9, conversationId: 5, role: "agent" as const, body: "## Summary", createdAt: 1, kind: "agent" as const, status: "complete" as const };
+  s = ev(s, { type: "chat_agent_message", conversationId: 5, generation: 1, message: finding });
+  assert.deepEqual([s.chatResearching, s.chatMessages.map((m) => m.role)], [null, ["agent"]]);
+  s = ev(s, { type: "chat_agent_message", conversationId: 5, generation: 1, message: finding });
+  assert.equal(s.chatMessages.length, 1, "a repeated event does not duplicate the message");
+});
+
+test("a launched website is added to the open quest once, and stays separate from its status", () => {
+  const svc = { id: 1, taskId: 1, kind: "url" as const, label: "http://localhost:3000", url: "http://localhost:3000", pid: null, status: "running", createdAt: 0 };
+  let s = ev(selected(), { type: "service_found", taskId: 1, service: svc });
+  s = ev(s, { type: "service_found", taskId: 1, service: svc });
+  s = ev(s, { type: "run_finished", taskId: 1, executionId: 1, status: "completed", result: null, note: null, exitCode: 0 });
+  assert.equal(s.services.length, 1);
+  assert.equal(s.detail?.task.status, "completed", "the quest is completed even though its server is still running");
+  assert.equal(ev(selected(), { type: "service_found", taskId: 99, service: svc }).services.length, 0);
 });
