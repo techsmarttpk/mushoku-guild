@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { LatencyStats, nowUnixMs, type LatencySummary } from "./bench";
 import { CafeScene, type SceneDiagnostics, type SceneMode } from "./cafe/CafeScene";
-import { appInfo, benchConfig, benchReady, benchReport, benchStream, type AppInfo } from "./ipc";
+import { appInfo, benchConfig, benchReady, benchReport, benchStream, onWindowMinimized, type AppInfo } from "./ipc";
 
 interface LifecycleEvent {
   atMs: number;
   kind: string;
   hidden: boolean;
   focused: boolean;
+  /** Pixi shared-ticker frames so far; two entries give the real frame rate in between. */
+  framesTicked: number;
+  /** Frames actually drawn (render-on-demand), to show how much rendering is skipped. */
+  framesRendered: number;
 }
 
 const ACTIVE_RATE_HZ = 60;
@@ -21,6 +25,7 @@ export function App() {
   const sceneRef = useRef<CafeScene | null>(null);
   const baseMode = useRef<SceneMode>("ambient");
   const blurStops = useRef(false);
+  const minimized = useRef(false);
   const benchEnabled = useRef(false);
   const scenario = useRef("none");
   const lifecycle = useRef<LifecycleEvent[]>([]);
@@ -65,13 +70,23 @@ export function App() {
     const scene = new CafeScene();
     sceneRef.current = scene;
     let cancelled = false;
+    const markTimers: ReturnType<typeof setTimeout>[] = [];
+    let unlistenMinimized: (() => void) | null = null;
 
     const syncMode = (): void => {
-      const stop = document.hidden || (blurStops.current && !document.hasFocus());
+      const stop = document.hidden || minimized.current || (blurStops.current && !document.hasFocus());
       scene.setMode(stop ? "stopped" : baseMode.current);
     };
     const record = (kind: string): void => {
-      lifecycle.current.push({ atMs: nowUnixMs(), kind, hidden: document.hidden, focused: document.hasFocus() });
+      const d = scene.diagnostics();
+      lifecycle.current.push({
+        atMs: nowUnixMs(),
+        kind,
+        hidden: document.hidden,
+        focused: document.hasFocus(),
+        framesTicked: d.framesTicked,
+        framesRendered: d.framesRendered,
+      });
       syncMode();
       if (benchEnabled.current) {
         void benchReport(buildReport()).catch((e: unknown) => setStatus(`report failed: ${String(e)}`));
@@ -91,14 +106,32 @@ export function App() {
         benchEnabled.current = cfg.enabled;
         blurStops.current = cfg.blurStops;
         scenario.current = cfg.scenario;
-        baseMode.current = cfg.scenario === "active" ? "active" : "ambient";
+        baseMode.current = cfg.scenario === "active" ? "active" : cfg.scenario === "static" ? "stopped" : "ambient";
+        const unlisten = await onWindowMinimized((m) => {
+          minimized.current = m;
+          record(m ? "minimized" : "restored");
+        });
+        if (cancelled) {
+          unlisten();
+          return;
+        }
+        unlistenMinimized = unlisten;
         setInfo(ai);
+        if (cfg.scenario === "blank") {
+          // Measurement baseline: Tauri window + React shell only, no Pixi/WebGL.
+          await benchReady();
+          setStatus("ready (blank baseline)");
+          return;
+        }
         await scene.init(host);
         if (cancelled) return;
         syncMode();
         setDiag(scene.diagnostics());
         await benchReady();
         setStatus("ready");
+        for (const m of cfg.marksMs) {
+          markTimers.push(setTimeout(() => record("mark"), m)); // one-shot timers; no recurring wake-ups
+        }
         if (cfg.scenario === "active") {
           await runStream(ACTIVE_RATE_HZ, ACTIVE_DURATION_MS);
         }
@@ -109,6 +142,8 @@ export function App() {
 
     return () => {
       cancelled = true;
+      markTimers.forEach(clearTimeout);
+      unlistenMinimized?.();
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("blur", onBlur);

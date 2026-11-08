@@ -1,14 +1,34 @@
 // PixiJS café scene controller. It deliberately lives outside React: React creates and destroys it once,
-// and every frame is driven by Pixi's shared ticker, never by React renders (ADR-0010).
+// and the scene drives itself (ADR-0010).
 //
 // Phase 2 spike: all art is generated from vector primitives at runtime (no asset files). The scene is
 // static decoration plus two idle-animated characters; it is NOT driven by agent activity yet.
-import { AnimatedSprite, Application, Graphics, Rectangle, Sprite, Texture, Ticker } from "pixi.js";
+//
+// Rendering regimes (measured in Phase 2, see docs/measurements/phase2/README.md):
+//  - stopped: nothing is scheduled at all. Cost is the platform floor (~0.05% total CPU).
+//  - ambient: a plain timer changes the idle pose ~3 times per second and draws only then. No
+//             requestAnimationFrame loop exists, because an rAF loop costs ~1.7% CPU at ANY frame cap:
+//             Pixi's maxFPS only skips work inside the callback while the browser still wakes at display rate.
+//  - active:  Pixi's shared ticker (rAF) capped at 30 fps, drawing only when something changed.
+// Pixi's internal system ticker (event polling on rAF) is kept stopped in every mode; nothing in the scene
+// is interactive yet. Re-enable it deliberately when pointer interaction is added.
+import {
+  AnimatedSprite,
+  Application,
+  Graphics,
+  Rectangle,
+  Sprite,
+  Texture,
+  Ticker,
+  UPDATE_PRIORITY,
+} from "pixi.js";
 
 export type SceneMode = "stopped" | "ambient" | "active";
 
-/** Frame-rate caps per mode. 0 fps ("stopped") means the ticker is not running at all. */
-const MAX_FPS = { ambient: 15, active: 30 } as const;
+const ACTIVE_MAX_FPS = 30;
+const AMBIENT_STEP_MS = 333; // idle pose change interval (~3 per second)
+const ACTIVE_POSE_MS = 80; // pose change interval while active (~12 per second)
+const POSES = 4;
 const WIDTH = 640;
 const HEIGHT = 360;
 
@@ -16,7 +36,13 @@ export interface SceneDiagnostics {
   renderer: string;
   gpuVendor: string;
   gpuRenderer: string;
+  /** Scene update steps: ambient timer steps plus active ticker frames. */
   framesTicked: number;
+  /** Frames actually drawn. */
+  framesRendered: number;
+  /** Pixi keeps two tickers: the shared one (active mode) and an internal system ticker (events). */
+  sharedTicker: { started: boolean; listeners: number };
+  systemTicker: { started: boolean; listeners: number };
 }
 
 export class CafeScene {
@@ -27,17 +53,21 @@ export class CafeScene {
   private characters: AnimatedSprite[] = [];
   private ticket: Sprite | null = null;
   private ticketDirection = 1;
+  private pose = 0;
+  private poseAccumMs = 0;
+  private ambientTimer: ReturnType<typeof setTimeout> | null = null;
   private framesTicked = 0;
+  private framesRendered = 0;
 
   async init(host: HTMLElement): Promise<void> {
     await this.app.init({
       width: WIDTH,
       height: HEIGHT,
       preference: "webgl", // WebGL is the recommended production renderer in PixiJS v8
-      powerPreference: "low-power", // a tiny 2D scene should not wake the discrete GPU
+      powerPreference: "low-power", // a tiny 2D scene should not wake the discrete GPU (hint only; see docs)
       antialias: false,
       autoStart: false, // nothing renders until a mode is chosen
-      sharedTicker: true, // AnimatedSprite advances on the shared ticker, so one ticker governs every frame
+      sharedTicker: true,
       background: 0x2b2118,
       resolution: Math.min(window.devicePixelRatio, 1.5),
       autoDensity: true,
@@ -48,10 +78,12 @@ export class CafeScene {
     }
     host.appendChild(this.app.canvas);
     this.build();
-    this.app.ticker.add(this.onTick, this);
-    this.app.render(); // one static frame, so a stopped scene is never blank
+    // Render on demand: drop Pixi's automatic render-every-tick listener; we draw explicitly.
+    this.app.ticker.remove(this.app.render, this.app);
+    this.app.ticker.add(this.onActiveTick, this, UPDATE_PRIORITY.LOW);
     this.initialised = true;
     this.apply();
+    this.draw(); // one static frame, so a stopped scene is never blank
   }
 
   setMode(mode: SceneMode): void {
@@ -75,14 +107,19 @@ export class CafeScene {
       gpuVendor,
       gpuRenderer,
       framesTicked: this.framesTicked,
+      framesRendered: this.framesRendered,
+      sharedTicker: { started: Ticker.shared.started, listeners: Ticker.shared.count },
+      systemTicker: { started: Ticker.system.started, listeners: Ticker.system.count },
     };
   }
 
   destroy(): void {
     this.destroyed = true;
+    this.clearAmbientTimer();
     if (this.initialised) {
-      this.app.ticker.remove(this.onTick, this);
+      this.app.ticker.remove(this.onActiveTick, this);
       this.app.ticker.stop();
+      Ticker.system.stop();
       this.initialised = false;
       this.disposeApp();
     }
@@ -94,28 +131,61 @@ export class CafeScene {
   }
 
   private apply(): void {
-    const ticker = this.app.ticker;
-    if (this.mode === "stopped") {
-      ticker.stop();
+    this.clearAmbientTimer();
+    Ticker.system.stop();
+    if (this.mode === "active") {
+      this.app.ticker.maxFPS = ACTIVE_MAX_FPS;
+      this.app.ticker.start();
       return;
     }
-    ticker.maxFPS = MAX_FPS[this.mode];
-    const speed = this.mode === "active" ? 0.2 : 0.1;
-    for (const c of this.characters) {
-      c.animationSpeed = speed;
+    this.app.ticker.stop();
+    if (this.mode === "ambient") {
+      this.scheduleAmbientStep();
     }
-    ticker.start();
   }
 
-  private readonly onTick = (ticker: Ticker): void => {
+  private clearAmbientTimer(): void {
+    if (this.ambientTimer !== null) {
+      clearTimeout(this.ambientTimer);
+      this.ambientTimer = null;
+    }
+  }
+
+  private scheduleAmbientStep(): void {
+    this.ambientTimer = setTimeout(() => {
+      this.framesTicked += 1;
+      this.setPose(this.pose + 1);
+      this.draw();
+      this.scheduleAmbientStep();
+    }, AMBIENT_STEP_MS);
+  }
+
+  private setPose(pose: number): void {
+    this.pose = pose % POSES;
+    this.characters.forEach((c, i) => c.gotoAndStop((this.pose + i * 2) % POSES)); // characters offset by half a cycle
+  }
+
+  private readonly onActiveTick = (ticker: Ticker): void => {
+    if (this.mode !== "active") return;
     this.framesTicked += 1;
-    if (this.mode === "active" && this.ticket) {
+    this.poseAccumMs += ticker.deltaMS;
+    if (this.poseAccumMs >= ACTIVE_POSE_MS) {
+      this.poseAccumMs = 0;
+      this.setPose(this.pose + 1);
+    }
+    if (this.ticket) {
       const t = this.ticket;
       t.x += this.ticketDirection * 2 * ticker.deltaTime;
       if (t.x > 300) this.ticketDirection = -1;
       if (t.x < 60) this.ticketDirection = 1;
     }
+    this.draw(); // the ticket moves every tick in active mode
   };
+
+  private draw(): void {
+    this.app.render();
+    this.framesRendered += 1;
+  }
 
   private rect(x: number, y: number, w: number, h: number, color: number): Graphics {
     return new Graphics().rect(x, y, w, h).fill(color);
@@ -149,16 +219,16 @@ export class CafeScene {
       stage.addChild(new Graphics().circle(x, 290, 28).fill(0x8a6240)); // tables
     }
 
-    const reasoner = new AnimatedSprite(this.characterFrames(0x7a5cc0));
+    // autoUpdate=false: poses are stepped explicitly (timer in ambient, ticker in active), never by a hidden rAF loop.
+    const reasoner = new AnimatedSprite(this.characterFrames(0x7a5cc0), false);
     reasoner.position.set(110, 148);
-    const executor = new AnimatedSprite(this.characterFrames(0xc0643c));
+    const executor = new AnimatedSprite(this.characterFrames(0xc0643c), false);
     executor.position.set(300, 148);
     for (const c of [reasoner, executor]) {
-      c.animationSpeed = 0.1;
-      c.play();
       stage.addChild(c);
     }
     this.characters = [reasoner, executor];
+    this.setPose(0);
 
     const ticketTexture = this.texture(
       new Graphics().rect(0, 0, 22, 14).fill(0xf4e8c8),

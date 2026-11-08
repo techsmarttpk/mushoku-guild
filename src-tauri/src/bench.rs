@@ -42,6 +42,9 @@ pub struct BenchConfig {
     scenario: String,
     /// When true the scene stops rendering on window blur (experiment switch for task 2.4).
     blur_stops: bool,
+    /// One-shot "mark" times (ms after ready) at which the frontend records its frame counter,
+    /// so the harness can compute the real frame rate between two marks.
+    marks_ms: Vec<u64>,
 }
 
 #[tauri::command]
@@ -51,6 +54,9 @@ pub fn bench_config() -> BenchConfig {
         enabled: out_base().is_some(),
         scenario,
         blur_stops: std::env::var("MUSHOKU_BENCH_BLUR_STOPS").map(|v| v == "1").unwrap_or(false),
+        marks_ms: std::env::var("MUSHOKU_BENCH_MARKS_MS")
+            .map(|v| v.split(',').filter_map(|s| s.trim().parse().ok()).collect())
+            .unwrap_or_default(),
     }
 }
 

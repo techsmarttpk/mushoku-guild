@@ -1,5 +1,6 @@
 // Typed wrappers around the Rust commands. The frontend only ever talks to Rust through these.
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface AppInfo {
   name: string;
@@ -13,6 +14,7 @@ export interface BenchConfig {
   enabled: boolean;
   scenario: string;
   blurStops: boolean;
+  marksMs: number[];
 }
 
 export interface BenchTick {
@@ -20,6 +22,10 @@ export interface BenchTick {
   sentAtMs: number;
   text: string;
 }
+
+/** Rust-published window state: WebView2 itself does not report minimisation to the page. */
+export const onWindowMinimized = (handler: (minimized: boolean) => void): Promise<UnlistenFn> =>
+  listen<boolean>("window-minimized", (e) => handler(e.payload));
 
 export const appInfo = (): Promise<AppInfo> => invoke<AppInfo>("app_info");
 export const benchConfig = (): Promise<BenchConfig> => invoke<BenchConfig>("bench_config");
