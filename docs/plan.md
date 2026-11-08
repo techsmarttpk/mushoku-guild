@@ -16,7 +16,7 @@
 |---|-------|--------|
 | 0 | Repository initialisation & governance | completed |
 | 1 | Discovery & feasibility | completed |
-| 2 | Foundation (project skeleton, tooling, CI) | prepared — starts only on the user's explicit instruction |
+| 2 | Foundation (project skeleton, tooling, CI) | in progress (2.0–2.6 authorised; 2.7–2.10 on hold) |
 | 3 | MVP — headless orchestration core + real agent integration | planned |
 | 4 | MVP — presentation layer (café v1) | planned |
 | 5 | Integration hardening | planned |
@@ -102,9 +102,9 @@ Phase 1 tasks left unticked above were **not completed**; they are carried forwa
 - Ask OpenAI to confirm Go eligibility; review licence and terms; put the CLI-spawning question to Anthropic; extra ChatGPT and Claude CLI test coverage; Claude settings policy; clarifications on approval model/persistence/fallback → the register below and `docs/context.md` §15.
 - Remove or keep `spikes/` → decided at the end of Phase 3 or when the real adapters replace them.
 
-## Phase 2 — Foundation (prepared; NOT started — begins only on the user's explicit instruction)
+## Phase 2 — Foundation (in progress; tasks 2.0–2.6 authorised, 2.7–2.10 on hold until the gate is reviewed)
 
-- **Status:** planned — ready to start; awaiting the user's explicit go
+- **Status:** in-progress — started 2026-11-08 on the user's explicit instruction (tasks 2.0–2.6 only; 2.7–2.10 stay untouched until the user reviews the gate)
 - **Objective:** Create a buildable, linted, tested Tauri skeleton and prove it meets the resource budgets **before** any feature work. This phase contains no product features.
 - **Deliverables:** Installed toolchain; Tauri 2 + Rust + TypeScript/React + PixiJS skeleton; formatter, linter, test runners; CI; a measurement harness and a recorded baseline; the gate decision (confirm or revise ADR-0010/0012); updated `CLAUDE.md` coding standards.
 - **Dependencies:** Phase 1 completed (met 2026-11-08); ADR-0010, ADR-0011 and ADR-0012 accepted (met); Rust/MSVC toolchain installed (task 2.0, **not yet met**); the user's explicit start instruction (**not yet given**).
@@ -116,8 +116,8 @@ Phase 1 tasks left unticked above were **not completed**; they are carried forwa
   5. **Commit discipline:** one logical commit per task group, Conventional Commits, no commit/push without the user's authorisation for that session; docs and `plan.md` updated with each task.
   6. **Out of scope for Phase 2:** providers, OAuth, Claude CLI integration, SQLite schema, real café art, the approval flow. The skeleton may contain only placeholders needed for the measurements.
 - **Tasks:**
-  - [ ] **2.0 Toolchain:** install Rust (MSVC toolchain, pinned version) and Microsoft C++ Build Tools on the dev machine; verify WebView2 runtime; record versions in `docs/architecture.md`
-  - [ ] **2.1 Walking skeleton:** `create-tauri-app`-style scaffold (Tauri 2, TypeScript, React, Vite), a single window, one Rust command, one Channel stream; no business logic
+  - [x] **2.0 Toolchain** (verified 2026-11-08): Rust 1.99.1 stable (MSVC host) via rustup under `D:\toolchains` (installer SHA-256 matched Rust's published checksum); Microsoft C++ Build Tools 17.14 with only `VC.Tools.x86.x64` (MSVC 14.44.35207) and `Windows11SDK.22621` (SDK 10.0.22621.5040 at `D:\Windows Kits\10`), installed from Microsoft's signed bootstrapper; WebView2 runtime 157.0.4341.42 present. A scratch `cargo build` linked and ran a program through the MSVC linker. **Known issue:** the Visual Studio instance registration did not land in the standard `C:\ProgramData` location (my temporary cache-path policy put it on `D:`), so `rustc`/`vswhere` do not auto-discover the tools; builds currently run inside the VS developer environment (`vcvars64.bat`). An elevated one-line repair is documented in `docs/architecture.md` §12 and was declined/cancelled once; it is optional. Details: `docs/architecture.md` §12
+  - [x] **2.1 Walking skeleton** (verified 2026-11-08): Tauri 2.12.5 + Rust core (`src-tauri/`, one product command `app_info`, plus Phase 2 measurement fixtures in `bench.rs`), React 19.3.1 + TypeScript 7.0.2 strict + Vite 8.3.6 frontend (`src/`), single 960x640 window, one ordered Tauri Channel stream. Evidence: `tsc --noEmit` clean; `pnpm build` ok; `cargo build` (debug, 8 m 09 s cold) ok with no warnings; debug exe run against the Vite dev server: command call returned, 2,700 channel events at 60 Hz arrived with 0 gaps (core-to-UI latency p50 0.78 ms, p95 1.66 ms, max 25.6 ms; debug build, one run, same-machine clocks so about 1 ms uncertainty). Frontend has no shell, filesystem or SQL access; capability is `core:default` only. Decision note: the app is a dependency-minimal skeleton; a dependency/feature audit of the 403-crate lockfile is deferred to task 2.7/2.8
   - [ ] **2.2 Scene spike:** minimal PixiJS WebGL scene (a few animated sprites on a spritesheet, ticker stop/start, `maxFPS`, `powerPreference: 'low-power'`); verify AnimatedSprite and render-on-demand behave as expected (docs gap)
   - [ ] **2.3 Measurement harness:** script to launch the app and sample the process tree (RAM, CPU, process count, startup time) for idle-focused, idle-hidden/minimised, and scripted-active states; repeat 3×; store results in `docs/` as a table
   - [ ] **2.4 Hidden-window behaviour:** test what Tauri/WebView2 does when the window is minimised or hidden; try ticker stop; test whether WebView2 `TrySuspend`/`MemoryUsageTargetLevel` are reachable from Tauri; record findings

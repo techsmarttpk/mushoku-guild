@@ -14,3 +14,8 @@ dist/
 build/
 target/
 *.log
+
+# Tauri / Rust build output and generated files
+src-tauri/target/
+src-tauri/gen/
+*.tsbuildinfo

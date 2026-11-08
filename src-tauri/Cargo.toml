@@ -1,0 +1,25 @@
+[package]
+name = "mushoku-guild"
+version = "0.0.0"
+description = "Mushoku Guild: a lightweight game-inspired desktop app for orchestrating AI-assisted development"
+edition = "2021"
+publish = false
+
+[lib]
+name = "mushoku_guild_lib"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Release profile tuned for a small binary (installer size is an ADR-0012 budget item).
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

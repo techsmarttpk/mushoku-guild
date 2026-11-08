@@ -249,3 +249,19 @@ Proceed with **Tauri 2 + Rust core + SQLite (rusqlite) + TypeScript UI (React) +
 src-tauri/            Rust workspace: core (orchestrator, events, approval gate), providers/{chatgpt,claude_cli}, store (rusqlite), config/secrets, commands (IPC)
 src/                  TypeScript UI: panels, approval dialogs, history; cafe/ (PixiJS scene controller)
 ```
+
+## 12. Development environment record (Phase 2, task 2.0 — measured/observed 2026-11-08)
+
+Reference machine: Windows 11 Home 10.0.26200, i5-10300H (4C/8T), 15.8 GB RAM, Intel UHD + GTX 1650, `C:` ~15.6 GB free and `D:` ~111 GB free after the installs.
+
+| Tool | Version | Location / note |
+|------|---------|-----------------|
+| Rust (stable, `x86_64-pc-windows-msvc`, minimal profile) | rustc 1.99.1 (2026-10-13), cargo 1.99.1 | `D:\toolchains\rustup`, `D:\toolchains\cargo` (user env `RUSTUP_HOME`, `CARGO_HOME`, `PATH` set); rustup-init verified against Rust's published SHA-256 (the binary is not Authenticode-signed) |
+| Microsoft C++ Build Tools | VS Build Tools 17.14.44, MSVC toolset 14.44.35207 (`cl`/`link` 14.44.35229) | `D:\toolchains\BuildTools2022`; only components `VC.Tools.x86.x64` and `Windows11SDK.22621`; bootstrapper signed by Microsoft |
+| Windows SDK | 10.0.22621.5040 | `D:\Windows Kits\10` (chosen by the installer; not on `C:`) |
+| WebView2 runtime | 157.0.4341.42 (Evergreen) | system |
+| Node.js / pnpm | 24.13.0 / 11.22.0 | pnpm store on `D:\.pnpm-store` |
+
+Install footprint: Build Tools ≈ 1.6 GB on `D:`; Rust ≈ 0.7 GB on `D:`; SDK on `D:`; `C:` was not meaningfully consumed.
+
+**Known environment issue (tooling, not design):** I installed with a temporary Visual Studio setup policy that moved the package cache to `D:` (to protect the 12 GB `C:`), and removed the policy afterwards. The instance registration therefore sits in `D:\toolchains\vs-cache\_Instances\21e3d51a` instead of `C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances`, so `vswhere` and `rustc`'s automatic MSVC discovery find nothing. Verified workaround: run builds inside the developer environment (`D:\toolchains\BuildTools2022\VC\Auxiliary\Build\vcvars64.bat`), after which `cargo build` links correctly. Optional permanent fix (needs an elevated prompt): `robocopy D:\toolchains\vs-cache\_Instances\21e3d51a C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances\21e3d51a /E`. The one attempt to run this automatically was cancelled at the UAC prompt; nothing was forced.

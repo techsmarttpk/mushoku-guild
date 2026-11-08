@@ -1,0 +1,41 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #1c1510;
+  color: #f0e6d8;
+}
+body {
+  margin: 0;
+}
+main {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  max-width: 720px;
+}
+h1 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+.scene-host canvas {
+  display: block;
+  max-width: 100%;
+  border-radius: 6px;
+}
+.panel {
+  font-family: Consolas, monospace;
+  font-size: 0.8rem;
+  background: #2a2018;
+  border-radius: 6px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+}
+button {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #6b5640;
+  background: #3a2c20;
+  color: inherit;
+  cursor: pointer;
+}
