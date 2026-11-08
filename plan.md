@@ -14,7 +14,7 @@
 
 | # | Phase | Status |
 |---|-------|--------|
-| 0 | Repository initialisation & governance | in-progress |
+| 0 | Repository initialisation & governance | completed |
 | 1 | Discovery & feasibility | planned |
 | 2 | Foundation (project skeleton, tooling, CI) | planned |
 | 3 | MVP — headless orchestration core + real agent integration | planned |
@@ -27,7 +27,7 @@
 
 ## Phase 0 — Repository initialisation & governance
 
-- **Status:** in-progress
+- **Status:** completed
 - **Objective:** Establish the repository and the documentation/governance foundation.
 - **Deliverables:** GitHub repo with `main`; `CLAUDE.md`, `context.md`, `DECISIONS.md`, `architecture.md`, `system-design.md`, `plan.md`.
 - **Dependencies:** None.
@@ -41,7 +41,7 @@
   - [x] Write `architecture.md`
   - [x] Write `system-design.md`
   - [x] Write `plan.md`
-  - [ ] Commit and push documentation; verify it appears on the remote
+  - [x] Commit and push documentation; verified remote `main` = local HEAD (823d1bb) and lists all six files
 - **Acceptance criteria:** Remote `main` contains all six documents; documents are mutually consistent; no application code exists.
 - **Testing requirements:** Compare local `HEAD` with `origin/main`; re-read documents for contradictions.
 
@@ -158,4 +158,4 @@
 
 ## Change log
 
-- 2026-11-08 — Plan created during repository initialisation. Phase 0 documentation tasks completed; final commit/push verification pending.
+- 2026-11-08 — Plan created during repository initialisation. Phase 0 completed and verified on remote.
