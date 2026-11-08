@@ -361,3 +361,11 @@ src-tauri/            Cargo.toml, Cargo.lock, build.rs, tauri.conf.json, capabil
 tools/measure/        measure.mjs, sampler.ps1, window.ps1   (Phase 2 measurement harness)
 docs/measurements/phase2/   README.md, raw data, summaries
 ```
+
+## 15. Phase 3 implementation record (2026-11-08) — status: implemented; `docs/plan.md` says what is verified
+- **Rust modules** (`src-tauri/src/`): `db` (rusqlite, versioned migrations, WAL, quick_check with move-aside recovery, task state machine, bounded events: 1500 per execution, last 40 executions), `secrets` (Credential Manager, chunked), `chatgpt` (OAuth + PKCE, loopback listener on 127.0.0.1:1455 else an ephemeral port, ID-token iss/aud/exp/nonce checks; the signature is not re-verified because the token arrives from the token endpoint over TLS, OIDC Core 3.1.3.7(6); only the refresh token is stored, the access token lives in memory), `claude` (detect, spawn, stream normalisation, Job Object cleanup, approval server), `approver` (stdio MCP server, same exe), `commands` (the only frontend surface), `events` (single ordered `mg-event` stream).
+- **Security:** the frontend has no shell, filesystem or SQL access; capabilities remain `core:default`; strict CSP (Pixi `unsafe-eval` build); the child environment drops `CLAUDE*` session variables and `ANTHROPIC_API_KEY`/`AUTH_TOKEN`; `--strict-mcp-config`, `--setting-sources project,local`, `--disable-slash-commands`, never `--dangerously-skip-permissions` (unit-tested); approval timeout 10 minutes, then deny.
+- **Execution policies:** read-only (tools Read/Glob/Grep, any other request denied), ask-each (default), accept-edits (`--permission-mode acceptEdits`, Bash still asks).
+- **Scene:** no rAF loop; one timer (66 ms walking, 220 ms working poses, 500 ms idle); stops when minimised or hidden; the GPU draw is skipped when nothing changed.
+- **Measured:** `docs/measurements/phase3/README.md`.
+- **Known gaps:** no single-instance guard; the ChatGPT revocation endpoint is not called on disconnect; ChatGPT cancel takes effect at the next stream line; no code signing.

@@ -1,0 +1,28 @@
+{
+  "env": {
+    "exe": "D:/Projects/mushoku-guild/src-tauri/target/release/mushoku-guild.exe",
+    "note": "release build with dev-seed feature; one machine; AC power; other apps running"
+  },
+  "startupMs": 1017,
+  "idle": {
+    "samples": 44,
+    "cpuMean": 0.17,
+    "cpuMax": 0.78,
+    "privMBmean": 98.132,
+    "privMBmax": 99.8,
+    "wsMBmean": 379.995,
+    "procsMax": 7
+  },
+  "canvasCount": 1,
+  "runMs": 14392,
+  "runEnd": "Completed — review the result",
+  "active": {
+    "samples": 15,
+    "cpuMean": 1.157,
+    "cpuMax": 2.825,
+    "privMBmean": 102.647,
+    "privMBmax": 105.3,
+    "wsMBmean": 393.853,
+    "procsMax": 7
+  }
+}

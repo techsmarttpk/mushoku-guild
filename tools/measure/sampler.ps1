@@ -34,6 +34,10 @@ while ((Get-Date) -lt $end) {
   $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, WorkingSetSize, KernelModeTime, UserModeTime, CommandLine)
   if (-not ($all | Where-Object { $_.ProcessId -eq $RootPid })) { break }
   $ids = Get-TreeIds $RootPid $all
+  # Phase 3: the external Claude CLI (and everything it spawned, incl. the approver) is measured separately (ADR-0012 qualification).
+  foreach ($c in @($all | Where-Object { $ids.Contains([int]$_.ProcessId) -and $_.Name -eq 'claude.exe' })) {
+    foreach ($x in (Get-TreeIds ([int]$c.ProcessId) $all)) { [void]$ids.Remove($x) }
+  }
   $tree = @($all | Where-Object { $ids.Contains([int]$_.ProcessId) })
 
   $cpuTicks = 0.0

@@ -368,3 +368,11 @@ Facts future sessions must not rediscover. Evidence and numbers: `docs/architect
 - **Harness limits:** the measurement harness cannot reliably take OS focus away from the app (foreground lock); never use a synthetic Alt key tap (it stalls the WebView). Visible-but-unfocused behaviour is unmeasured.
 - **`bench.rs`, `src/bench.ts` and the `bench_*` IPC commands are Phase 2 measurement fixtures, not product code.** They are inert without `MUSHOKU_BENCH_OUT`. Remove or gate them before Phase 3 begins.
 - **Open questions added:** whether to accept ADR-0012 amendment A; whether to exercise WebView2 `TrySuspend`/`MemoryUsageTargetLevel` later (reachable, untested); first-ever-launch and cold-boot start-up; whether the app should hide to tray (then it knows it is hidden).
+
+## 17. Phase 3 learned facts (2026-11-08)
+- **Implemented and verified against the real tools:** Claude Code run (stream-json in/out, MCP approver served by `mushoku-guild.exe --mcp-approver` over loopback with a per-run secret, default deny, allow/deny, graceful interrupt then Job Object termination). A permission denial ends as `completed`, not `failed`.
+- **Not verified:** the ChatGPT flow beyond sign-in start and callback validation; real consent, refresh, model list and streaming need the owner's browser approval. Go eligibility remains unconfirmed; never claim it.
+- Kenney art could not be downloaded (scripted requests get HTTP 403; not circumvented). All art is original and generated in code; fonts VT323 and Press Start 2P are OFL (`docs/assets.md`).
+- Claude may decline prompts that look pointless (a bare `ping -n 90`); that is model behaviour, not an app failure.
+- Testing aid: `--features dev-seed` seeds a task from env vars; `tools/e2e/` drives the real app through the WebView2 debug port (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=N`).
+- Open: OpenAI terms/licence review, Anthropic third-party subscription policy, project licence, code signing, 8 h soak, single-instance, CI and lint tooling.
