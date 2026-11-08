@@ -1,6 +1,6 @@
 # system-design.md — Mushoku Guild System Design
 
-> **Status: PROPOSED.** Nothing described here is implemented. Sections labelled *Confirmed* derive from the user's stated requirements (`docs/context.md`); everything else is a proposal for Discovery to validate. Technology is TBD, so interfaces are written in language-neutral pseudo-notation.
+> **Status: PROPOSED design** (the technology stack, MVP scope and provisional budgets are accepted: ADR-0010, ADR-0011, ADR-0012). Nothing described here is implemented. Sections labelled *Confirmed* derive from the user's stated requirements (`docs/context.md`); everything else is a proposal for Discovery to validate. Interfaces are written in language-neutral pseudo-notation; the stack (Rust core, TypeScript UI) is decided by ADR-0010.
 
 ---
 
@@ -100,6 +100,10 @@ See `docs/architecture.md` §2. Summary: UI shell, café renderer, orchestrator,
 
 Single user, local — "scale" means *number of concurrent agents/tasks*, not users. Design for a handful of concurrent tasks; bounded event history; render cost independent of history length. Multi-user/cloud is out of scope (assumption A4).
 
+## 1.11 MVP cut
+
+The subset of these requirements planned for the first release is defined in `docs/context.md` §14 (M1–M8, accepted ADR-0011); everything else, including multiple providers, concurrent agents and diff tooling, is future work.
+
 ---
 
 # Part 2 — Low-Level Design (all proposed)
@@ -189,7 +193,7 @@ Result      { summary, changedFiles?, rawOutputRef?, reviewStatus }
 
 ## 2.4 Database design
 
-Persistence need and engine are **TBD** (open question 7). If adopted, a small embedded store holding Tasks, Steps, PromptVersions, Approvals and an append-only Events table, with retention limits to bound size. No schema is proposed until the engine is chosen.
+Decided (ADR-0010): SQLite accessed from the Rust core via rusqlite (ADR-0010, accepted). The tables, retention and migration approach in §2.16 are proposed design.
 
 ## 2.5 Task lifecycle
 
@@ -298,3 +302,31 @@ Steps 1–3 (registration, authorization, exchange, ID-token and scope checks) a
 **Parsing:** line-buffered NDJSON, tolerate partial chunks and unknown fields, bound stored events per run, redact nothing automatically (assistant output and tool inputs can contain secrets from the user's project; treat them as sensitive in logs).
 
 **Windows notes:** `windowsHide`, `shell:false`, scrubbed environment, never `System32\bash.exe`, Job Object fallback (untested).
+
+## 2.16 Persistence design (design PROPOSED; engine accepted in ADR-0010)
+
+SQLite accessed only from the Rust core (rusqlite, `bundled`); the frontend reaches data only through typed core commands. Journal mode WAL, foreign keys on, a schema version table with forward-only migrations applied at startup. Writes are batched (events are flushed on a short timer or when a batch fills) so an idle app performs no writes.
+
+Proposed tables (names and columns are a starting point, not final):
+
+| Table | Purpose and key columns |
+|-------|------------------------|
+| `schema_version` | `version`, `applied_at` |
+| `projects` | `id`, `path`, `display_name`, `last_used_at` |
+| `tasks` | `id`, `project_id`, `title`, `description`, `status`, `policy`, `created_at`, `updated_at`, `result_summary`, `review_status` |
+| `prompt_versions` | `id`, `task_id`, `version`, `text`, `author` (`agent`/`user`), `approved`, `created_at` |
+| `steps` | `id`, `task_id`, `role` (`reasoner`/`executor`), `provider_id`, `model`, `status`, `started_at`, `finished_at`, `error_kind`, `error_message`, `cli_session_id?` |
+| `approvals` | `id`, `task_id`, `step_id`, `kind`, `tool_name`, `summary`, `decision`, `decided_at`, `decided_by` |
+| `events` | `id`, `task_id`, `ts`, `type`, `payload_json` (bounded; see retention) |
+| `accounts` | `id`, `provider_id`, `display_label` (masked), `issued_client_id`, `host_id`, `status` — **no tokens**; secrets live in the OS credential store |
+| `settings` | key/value (policy defaults, lite mode, selected models, project paths) |
+
+Retention: configurable; default keep full task/prompt/approval rows indefinitely, trim `events` payloads older than a limit (for example 90 days or the newest N events per task), and offer "delete history". Prompts and outputs are sensitive: local only, never logged verbatim by default. Encryption at rest is not an MVP requirement (open item in `docs/context.md` §15.5).
+
+## 2.17 Core ↔ UI contract and scene projection (PROPOSED)
+
+- **Commands (UI → core)**, each validated in Rust: `create_task`, `approve_prompt`, `edit_prompt`, `request_prompt_revision`, `start_run(policy)`, `decide_approval(id, allow|deny)`, `cancel_task`, `accept_result`, `request_changes`, `list_history`, `get_task`, `sign_in(provider)`, `sign_out(provider)`, `get_provider_status`, `get_settings` / `set_setting`. No generic shell, filesystem or SQL command exists.
+- **Streams (core → UI)**: a single ordered Tauri Channel carrying typed `CoreEvent`s (`TaskStatusChanged`, `PromptDelta`, `RunOutput`, `ToolActivity`, `ApprovalRequested`, `ProviderStatusChanged`, `UsageUpdated`, `Error`). Token/tool deltas are coalesced in the core (for example at most one batch per 33 ms) because Tauri events are not designed for high throughput and ordering [doc].
+- **Scene projection**: the UI keeps a small reducer `CoreEvent → SceneState` (per character: `idle | thinking | waiting | working | blocked | done`, plus order-ticket state). The PixiJS controller subscribes to `SceneState` changes only, runs the ticker only while some animation is active, and stops it when the window is hidden, minimised or unfocused. The plain-text activity panel renders from the same events, so it is the accessible equivalent of the scene.
+- **Back-pressure and bounds**: the UI retains a bounded window of recent events per task; full history is fetched from SQLite on demand.
+- **Error surface**: every `ProviderError` kind (`docs/system-design.md` §2.2) maps to one user-facing message and, where useful, a single recovery action (sign in again, open "Manage usage", re-run preflight).

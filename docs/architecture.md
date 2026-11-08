@@ -1,6 +1,6 @@
 # architecture.md — Mushoku Guild Architecture
 
-> **Status: PROPOSED.** Nothing here is implemented. This document describes the intended shape of the system and is the starting point for Discovery. It must evolve with the real implementation. Items marked **TBD** are undecided (see `docs/DECISIONS.md`, ADR-0003).
+> **Status:** the technology stack, MVP scope and provisional budgets are **accepted** (ADR-0010, ADR-0011, ADR-0012, 2026-11-08); the rest of the design is **PROPOSED**. Nothing here is implemented. This document describes the intended shape of the system and is the starting point for Discovery. It must evolve with the real implementation. Items marked **TBD** or *proposed* are undecided (see `docs/DECISIONS.md`).
 
 ## 1. System overview
 
@@ -33,15 +33,15 @@ Core idea: **a small, headless orchestration core** (tasks, handoffs, approvals,
 
 | Concern | Choice |
 |---------|--------|
-| Language / runtime | TBD |
-| Desktop shell | TBD |
-| Rendering approach for café | TBD (constraint: no heavy game engine unless justified) |
-| Persistence | TBD |
+| Language / runtime | Accepted (ADR-0010): Rust core; TypeScript + React UI |
+| Desktop shell | Accepted (ADR-0010): Tauri 2 on WebView2; assumptions verified by the Phase 2 measurement gate |
+| Rendering approach for café | Accepted (ADR-0010): PixiJS v8, WebGL renderer, render-on-demand loop (no heavy game engine) |
+| Persistence | Accepted (ADR-0010): SQLite via rusqlite (`bundled`) in the Rust core; schema is proposed design (`docs/system-design.md` §2.16) |
 | Agent integration — Claude Code | Accepted (ADR-0006): unmodified `claude` CLI as child process, headless stream-json (ADR-0006). Agent SDK not used with subscription auth. |
-| Agent integration — prompt engineering agent | Proposed (ADR-0007): ChatGPT via Sign in with ChatGPT plan usage; self-implemented client (ADR-0008). Spike succeeded for the user's account (`docs/context.md` §12); Go eligibility not confirmed by OpenAI. |
-| Provider abstraction | Proposed (ADR-0009), see §6a |
-| Packaging / installer | TBD |
-| Test framework | TBD |
+| Agent integration — prompt engineering agent | Proposed (ADR-0007, ADR-0008, not accepted): ChatGPT via Sign in with ChatGPT plan usage; self-implemented client. Spike succeeded for the user's account (`docs/context.md` §12); Go eligibility not confirmed by OpenAI. |
+| Provider abstraction | Proposed (ADR-0009, not accepted), see §6a |
+| Packaging / installer | Accepted (ADR-0010): NSIS installer (MSI avoided: needs VBSCRIPT); code signing is a release blocker |
+| Test framework | Proposed: `cargo test` (Rust), Vitest (TypeScript); chosen formally in Phase 2 |
 
 Selection criteria (from confirmed constraints): low idle CPU, low RAM, small install size, ease of spawning/streaming from subprocesses, Windows support, maintainability by a small team. Evaluation happens in `docs/plan.md` Phase 1.
 
@@ -170,12 +170,82 @@ Event and entity details: `docs/system-design.md`.
 
 - Single local desktop process (plus child processes for agents). No server component, no cloud backend assumed (assumption A4 in `docs/context.md`).
 - Target platform: Windows 11 at minimum; others TBD.
-- Distribution/installer/updates: TBD.
+- Distribution: proposed NSIS installer; auto-update deferred (post-MVP); signing is a release item (`docs/context.md` §15.4).
 
-## 9. Resource budget
+## 9. Resource budget (ACCEPTED as provisional engineering targets — ADR-0012; not yet measured)
 
-Targets: **TBD**. Budgets will be set after measuring a baseline in the Discovery spike, then recorded here and in `docs/plan.md`. Design rules that apply regardless: event-driven (no polling loops), render throttling when unfocused, bounded in-memory logs, lazily loaded assets.
+Reference machine: i5-10300H (4C/8T), 15.8 GB RAM, Intel UHD + GTX 1650, Windows 11. **No number below has been measured for this stack.** The user accepted these as provisional engineering targets with binding qualifications: (1) **measure, do not assume**; (2) **stability and security take priority** over meeting any number; (3) if a target is unrealistic, **document the evidence and propose a revised target** for approval; (4) **`claude.exe` and its children are measured and reported separately** from Mushoku Guild's own usage. They were chosen to be meaningfully lighter than the agent the app launches (`claude.exe` used about 200–285 MB for a small run, `docs/context.md` §13.8) and are verified or revised by the Phase 2 measurement gate. "Mushoku Guild process tree" means the Tauri app process plus all WebView2 processes it owns, **excluding** `claude.exe` and its children (the user's tool).
+
+Assumption (confirmed by the user's direction): **one Reasoner request and one Executor run at a time.** Multiple simultaneous coding agents are not a goal, and the budgets assume none.
+
+| Metric | Target | Hard limit (triggers redesign review) | How measured |
+|--------|--------|--------------------------------------|--------------|
+| Cold start to interactive window | ≤ 2.5 s | 4 s | 5 cold and 5 warm launches; time from process start to first interactive frame |
+| Installer size (NSIS, WebView2 downloadBootstrapper, with MVP art) | ≤ 15 MB | 30 MB | Build output |
+| Installed size on disk | ≤ 60 MB | 120 MB | Folder size |
+| Idle RAM (café visible, focused, nothing running) | ≤ 180 MB | 250 MB | Sum of working set of the process tree, 60 s window, 3 runs |
+| Active RAM (task running, text streaming, scene animating) | ≤ 260 MB | 350 MB | Same, during a scripted task |
+| RAM growth over 8 h with periodic tasks | ≤ +50 MB | +120 MB | Soak test with sampled working set |
+| Idle CPU, focused, ambient animation on | ≤ 2% of total CPU | 4% | 60 s average via process-tree sampling |
+| Idle CPU, window hidden/minimised/unfocused | ≤ 0.3% | 1% | Same; rendering must be fully stopped |
+| Active CPU (streaming + animation) | ≤ 8% average, ≤ 15% peak | 15% / 25% | Scripted task |
+| Frame rate | ≤ 30 fps active, ≤ 15 fps ambient idle, 0 fps hidden | — | Pixi ticker settings; frame counter |
+| GPU use | Prefer integrated GPU; ≤ 5% utilisation in active scene | — | Task Manager/perf counters |
+| Process count (our tree) | ≤ 8 | 12 | Process snapshot |
+| Idle disk writes | 0 per minute | — | Process I/O counters |
+| Event latency (core event → visible in UI) | ≤ 100 ms p95 | 250 ms | Instrumented timestamps |
+| SQLite size | Bounded by retention (e.g. last 500 tasks / 90 days of events) | — | Retention job test |
+
+Design rules that follow: event-driven (no polling); Channels with coalescing for streams; Pixi ticker stopped when hidden or idle; textures in spritesheets and unloaded when unused; bounded in-memory logs and event history; a "lite" mode (static scene, no animation) that the user can pick. The measurement method (PowerShell/CIM process-tree sampling) was exercised in the Claude CLI spike and must be replaced by a more precise counter in the gate if needed.
 
 ## 10. Open architectural questions
 
 See `docs/context.md` §8. Notable: whether the orchestrator and renderer share a process, how agents are sandboxed/permissioned, and the persistence model.
+
+## 11. Technology stack evaluation (Phase 1 closure) — ACCEPTED (ADR-0010, 2026-11-08)
+
+Status: **accepted by the user (ADR-0010, 2026-11-08); this section records the evaluation behind the decision.** This section evaluates the stack the user proposed (Tauri 2, React + TypeScript, PixiJS, Rust, SQLite) for Windows, lightweight resource use, developer experience and the integration needs found in the spikes. Evidence labels: **[doc]** = stated in official documentation fetched 2026-11-08; **[local]** = observed on the user's machine; **[general]** = general engineering knowledge, not verified or measured here; **[gap]** = the official docs are silent. **No Tauri, WebView2 or PixiJS resource number has been measured.**
+
+### 11.1 Environment facts
+- [local] i5-10300H (4 cores / 8 threads), 15.8 GB RAM, Intel UHD Graphics plus NVIDIA GTX 1650 (hybrid graphics), Windows 11, 115 GB free on `D:`.
+- [local] WebView2 Evergreen runtime 157.0.4341.42 is installed. **Rust, Cargo and the MSVC C++ Build Tools were not detected**; Node 24, npm and pnpm are present. Phase 2 therefore begins with a toolchain install (Tauri requires the C++ Build Tools and Rust MSVC toolchain [doc]).
+
+### 11.2 Component assessment
+
+| Component | Verdict | Evidence and reasoning |
+|-----------|---------|------------------------|
+| **Tauri 2** (shell) | Accepted (ADR-0010); assumptions verified by the Phase 2 measurement gate | [doc] MIT/Apache-2.0; latest stable crate 2.12.3 (Oct 2026); uses the OS WebView (WebView2 on Windows) so no browser engine is bundled; NSIS and MSI installers; `downloadBootstrapper` adds +0 MB (the WebView2 runtime ships with Windows 11 and nearly all Windows 10); capabilities, CSP and an isolation pattern for the frontend/backend boundary; Channels recommended for streaming; single-instance and tray plugins exist. [gap] no official memory/CPU/size comparison with Electron; no statement on suspending a hidden webview. [doc] The multi-process WebView2 model still means several processes per app; no per-app footprint is published. |
+| **Rust** (core) | Recommended | [doc] Tauri core owns state and DB connections; async commands; process spawn, SSE, loopback listener, OAuth and SQLite all fit a headless core that matches the architecture (`docs/architecture.md` §1). [general] Strong fit for reliable child-process and Win32 work (Job Objects, tree kill). Cost: steeper learning curve; slow cold builds; toolchain install (~GBs for MSVC build tools). |
+| **React + TypeScript** (UI) | Acceptable; low risk | [general] The UI is small (panels, forms, approval dialogs, history). Framework weight is negligible next to the WebView2 runtime, so the choice is about developer experience. Alternatives (Preact, Solid, Svelte) are lighter but add no decisive benefit. Keep the PixiJS scene **outside** React's render cycle (an imperative scene controller fed by core events) so React re-renders never touch the render loop. |
+| **PixiJS v8** (café renderer) | Recommended with limits | [doc] v8.22.0, MIT; WebGL renderer is the production default and WebGPU is experimental, so use WebGL; `Ticker` supports `stop()`/`start()` and `maxFPS`; `renderer.render()` can render a stage manually; `Application` accepts `powerPreference` (`low-power`/`high-performance`), `autoStart`; spritesheets and texture unloading are documented. [gap] AnimatedSprite and render-on-demand are not documented in the pages read (verify in the gate); no official bundle size; the docs contradict themselves on the manual-render signature. [general] A GTX 1650 and iGPU are far beyond what a small 2D café needs; the real concern is keeping the loop idle, not GPU power. |
+| **SQLite via `rusqlite`** (persistence) | Recommended; use from the Rust core, not the frontend plugin | [doc] rusqlite 0.41.x, MIT, `bundled` feature recommended on Windows (bundles SQLite 3.54); `tauri-plugin-sql` (sqlx) exposes the DB to the frontend and needs extra permissions; Tauri's process-model page says the core should own database connections. [gap] Tauri docs do not mention rusqlite; rusqlite docs give no WAL guidance (use SQLite's own WAL documentation). Keeping the DB behind core-only commands means a compromised frontend cannot read history directly. |
+
+### 11.3 Alternatives considered (qualitative; unmeasured [general])
+
+| Option | Idle RAM / size expectation | 2D café ease | Windows fit | Integration fit | Verdict |
+|--------|----------------------------|--------------|-------------|-----------------|---------|
+| **Tauri 2 + WebView2 + Pixi** | Moderate (WebView2 process group); small installer | High (web tooling, sprites) | High | High (Rust core) | **Accepted (ADR-0010); verified by the Phase 2 gate** |
+| Electron | Higher (bundles Chromium) | High | High | High (Node) | Rejected: contradicts the lightweight goal; Chromium bundled |
+| .NET (WPF/WinUI) + SkiaSharp/Win2D | Possibly the lightest *Windows-only* option; no browser | Medium (custom sprite loop) | Very high; Windows-only | High (C#; Credential Manager, Job Objects natively) | **Named fallback** if the Tauri gate fails; ties the product to Windows |
+| Rust-native (egui/iced/Slint) | Low | Low–medium (sprite scenes are awkward; immediate-mode redraw costs) | High | High | Not chosen: weaker art/animation workflow |
+| Godot / game engine | Higher baseline, engine runtime | Very high | High | Medium | Rejected: the user ruled out heavy engines; UI-heavy approval flows fit poorly |
+| Qt/QML | Moderate; licensing (LGPL/commercial) complexity | Medium | High | Medium | Not chosen: licensing and tooling weight |
+
+### 11.4 Risks specific to this stack
+1. **WebView2 memory is unmeasured.** The lightweight requirement depends on measurements, not documentation. Mitigation: a Phase 2 **measurement gate** (below) that must pass before any feature work.
+2. **Hidden/minimised behaviour.** WebView2 documents `IsVisible=false` (CPU/memory benefits, caches purged), `TrySuspend` and `MemoryUsageTargetLevel` [doc], but whether Tauri 2 exposes them is **unverified**. Fallback in app code: stop the Pixi ticker and all CSS animation when the window is hidden, unfocused or minimised.
+3. **Hybrid GPU laptop.** Which GPU WebView2 uses follows Windows graphics settings [general]; prefer the integrated GPU for a tiny scene (`powerPreference: 'low-power'` hint). To be checked in the gate.
+4. **Toolchain weight and Rust learning curve** (the Rust and C++ build tools are not installed here).
+5. **Streaming throughput.** Tauri events are not designed for high throughput or ordering [doc]; use Channels for token/tool streams and coalesce updates.
+6. **Security surface.** Tauri protects against frontend compromise only if capabilities are minimal and CSP is set [doc]; it does not protect against malicious Rust code, WebView zero-days or supply chain attacks. Do the process, credential and DB work in Rust and expose a narrow command set (no frontend shell, fs or SQL permissions).
+7. **Distribution.** Unsigned installers trigger SmartScreen warnings and are blocked by Smart App Control [doc]; MSI needs VBSCRIPT, so prefer NSIS.
+8. **Docs/version churn.** Tauri plugins require recent Rust (1.90+ [doc]); pin toolchain versions.
+
+### 11.5 Final recommendation
+Proceed with **Tauri 2 + Rust core + SQLite (rusqlite) + TypeScript UI (React) + PixiJS (WebGL)**, with these refinements: (a) the Rust core owns the orchestrator, providers, processes, OAuth, credential storage and SQLite; the frontend is a thin projection and never gets shell/fs/SQL access; (b) the café is an imperative PixiJS scene driven by a render-on-demand loop with 0 fps when hidden; (c) NSIS installer; (d) the Phase 2 measurement gate verifies the assumptions against the budgets in §9; if it shows a target is unrealistic or that stability or security would be compromised, the evidence is documented and a revision (including the .NET + Skia fallback) is proposed to the user. Accepted as ADR-0010.
+
+### 11.6 Proposed module layout (illustrative, not final)
+```
+src-tauri/            Rust workspace: core (orchestrator, events, approval gate), providers/{chatgpt,claude_cli}, store (rusqlite), config/secrets, commands (IPC)
+src/                  TypeScript UI: panels, approval dialogs, history; cafe/ (PixiJS scene controller)
+```

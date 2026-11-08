@@ -2,7 +2,7 @@
 
 Working memory for the project. Future sessions must read this first. Every item is labelled **[Confirmed]**, **[Assumption]** or **[Open]**. Do not promote assumptions to requirements without the user's agreement (record in `docs/DECISIONS.md`).
 
-_Last updated: 2026-11-08 (Phase 1 Claude Code CLI spike)._
+_Last updated: 2026-11-08 (Phase 1 completed; stack, MVP scope and budgets accepted)._
 
 ## 1. What Mushoku Guild is
 
@@ -81,7 +81,7 @@ The goal is to **automate this workflow**, removing the manual copy/paste handof
 
 ## 9. Current project status
 
-- **Phase:** 1 — Discovery, in progress (Phase 0 completed). See `docs/plan.md`.
+- **Phase:** Phase 1 (Discovery) **completed** 2026-11-08. The user accepted ADR-0010 (stack), ADR-0011 (MVP scope) and ADR-0012 (provisional budgets). Phase 2 (Foundation) is prepared but **not started**; it begins only on the user's explicit instruction. ADR-0007, ADR-0008 and ADR-0009 remain **proposed**, and every release blocker in §15.4 remains **open**.
 - Repository created at `https://github.com/techsmarttpk/mushoku-guild`, branch `main`.
 - Governance and design documents established.
 - **No application code exists. No technology has been chosen.**
@@ -283,3 +283,74 @@ Takeaways: a running `claude.exe` costs roughly 200 MB of RAM even for a trivial
 
 ### 13.11 Limits of this spike
 Single machine, single CLI version (2.1.319), small tasks, one model alias (`haiku`), Node launcher only. Undocumented behaviours used (interrupt `control_request`, MCP prompt-tool contract, event fields) may change between CLI versions; the app should pin and test against a minimum version and degrade to `taskkill` when graceful interrupt is unavailable. The test harness is not production code and is suitable only as evidence.
+
+## 14. MVP scope — ACCEPTED (ADR-0011, 2026-11-08)
+
+Status: **accepted by the user (ADR-0011, 2026-11-08).** Goal: the smallest version that is *genuinely useful* and demonstrates every capability the user listed, using real integrations only. One user, one project, one task at a time, Windows only. Multiple simultaneous coding agents are **not** a goal.
+
+### 14.1 MVP requirements (must have)
+| # | Capability | What the MVP delivers |
+|---|-----------|----------------------|
+| M1 | **2D café environment** | One fixed 2D café scene (PixiJS, WebGL) with a counter, an order board and two agent characters (a "reasoner" character for ChatGPT, an "executor" character for Claude Code). Animated states per agent: idle, thinking/streaming, waiting for approval, working (tool activity), blocked/error, done. A compact "lite" mode (static scene) and an always-visible plain-text activity panel (the accessible equivalent of the scene). Placeholder or simple original art; art quality and customisation are not in the MVP. |
+| M2 | **ChatGPT as reasoning/prompt-engineering agent** | Sign in with ChatGPT (system browser, PKCE, loopback), account shown, model picker from `/v1/models`, a built-in prompt-engineering instruction, streamed draft prompt, user can edit and request revisions. Handles refresh, sign-out/revoke, usage-limit and ineligibility errors with clear messages ("Using ChatGPT plan", "Manage usage" link per OpenAI's UI rules). |
+| M3 | **Claude Code executes approved tasks (native Windows CLI)** | Preflight (discover `claude.exe`, version, signature, login status, `ANTHROPIC_*` warning), launch per task in the chosen project directory with `-p --output-format stream-json`, `--strict-mcp-config`, scrubbed environment; stream output and tool activity; cancel (graceful interrupt then process-tree kill); outcome from the `result` event. |
+| M4 | **Real-time activity in the café** | The scene and activity panel are driven only by real events from the two adapters (never simulated): the reasoner character reacts to ChatGPT streaming; the executor character reacts to `tool_use`, approvals and `result`. |
+| M5 | **Task history and persistence** | SQLite: tasks, prompt versions, steps, approvals and decisions, bounded event log, settings. History view with search by title/date, prompt/result detail, and re-run from a previous prompt. Credentials stored via the OS (Windows Credential Manager or equivalent — storage decision still open), never in SQLite or logs. |
+| M6 | **User-controlled permissions and execution** | Nothing runs without approval: (1) user approves the engineered prompt, (2) user approves starting execution with a visible policy (read-only / ask for each action / allow edits in project), (3) each pending tool action is shown for approve/deny through the approver bridge, (4) user can cancel at any time, (5) after completion the user accepts, rejects or requests changes (loops back to ChatGPT with the feedback). Default policy is deny. |
+| M7 | **Resource budgets met** | The measurement gate and budgets in `docs/architecture.md` §9 pass on the reference laptop. |
+| M8 | **Installable on Windows** | NSIS installer; unsigned acceptable for personal/developer use (signing is a release item, §15). |
+
+### 14.2 MVP flow (single task)
+Describe task → ChatGPT drafts prompt (streamed) → user edits/approves → user chooses policy and approves run → Claude Code executes with live café activity and per-action approvals → result summary and tool log → user accepts / requests changes / rejects → stored in history.
+
+### 14.3 Explicitly NOT in the MVP (future features)
+Multiple projects open at once; concurrent tasks or agents; additional providers (DeepSeek, others) and a provider marketplace; a reviewer/QA agent; git diff viewer and PR integration (the MVP shows Claude's summary and tool log; a changed-files list is a candidate stretch); scene customisation, skins, sound, progression/gamification, multiple café layouts; task templates and scheduling; macOS/Linux; auto-update; telemetry or crash reporting; cloud sync or multi-user; plugin system; Claude Agent SDK or API-key billing paths; remote/hosted use; voice; localisation.
+
+### 14.4 MVP acceptance (summary; detail in `docs/plan.md`)
+A real task goes end to end on the reference laptop using the user's ChatGPT plan login and Claude Pro CLI login; every execution step needed an approval; the café reflected live events; the task is in history after restart; budgets pass; no tokens in logs or the DB; documented known limitations.
+
+## 15. Phase 1 closure: remaining questions and blockers
+
+Nothing here is resolved by this document; items are classified by when they must be resolved. **Phase 2** is foundation (skeleton, tooling, measurement gate); **Phase 3** is the headless core plus real integrations; **release** is distribution.
+
+### 15.1 Blockers to START Phase 2 (development blockers)
+1. ~~User approval of ADR-0010 (stack), ADR-0011 (MVP scope) and ADR-0012 (budgets).~~ **Resolved 2026-11-08:** the user accepted all three (ADR-0012 as provisional engineering targets).
+2. Toolchain on the development machine: install Rust (MSVC toolchain) and the Microsoft C++ Build Tools. [local] neither was detected; this is environment setup, not a design question.
+3. ~~CLAUDE.md names the stack.~~ **Resolved 2026-11-08:** `CLAUDE.md` §5 and §9 now name the accepted stack and state the budget rules; stack-specific tooling is chosen in Phase 2 task 2.7.
+
+### 15.2 Blockers to START Phase 3 (integration development)
+1. Decision on ADR-0007 (ChatGPT route), ADR-0008 (self-implemented client) and ADR-0009 (provider abstraction).
+2. Decision on the Mushoku Guild source licence (affects any OpenAI-derived code and what OpenAI's preview expects of open-source apps).
+3. Decision on credential storage mechanism (Windows Credential Manager via a Rust crate vs DPAPI-protected file) — not yet researched beyond OpenAI's file-with-owner-permissions guidance.
+4. Design of the approver bridge's local channel and its authentication (random per-run secret over a named pipe or loopback) — design only, no research left.
+5. A pinned minimum Claude CLI version and the compatibility-test approach (observed behaviour is specific to 2.1.319).
+
+### 15.3 Questions that can run in parallel with development (not blocking Phase 2 or 3 starts)
+- Ask OpenAI / read the help article (HTTP 403 earlier) to confirm Go eligibility for open-source plan usage in writing.
+- Refresh-token rotation, revocation, `id_token_hint` reauthorisation and usage-limit error behaviour: implement and test inside the real ChatGPT adapter (Phase 3) with the user's account. Documented by OpenAI, not yet exercised.
+- Claude CLI error paths (expired login, usage limit, `error_max_turns`/budget, `--permission-prompts none`, approver timeout/crash), machines without Git for Windows, long-lived vs per-task process.
+- Whether the app honours the user's global Claude settings/plugins/hooks or runs with `--setting-sources project,local`.
+
+### 15.4 RELEASE blockers (must be resolved before any public distribution)
+
+**All items below remain open after the 2026-11-08 approvals.** Accepting ADR-0010, ADR-0011 and ADR-0012 cleared none of them; they are tracked in the release blockers register in `docs/plan.md`.
+| Area | What must be settled |
+|------|----------------------|
+| **OpenAI preview and licensing** | The integration is documented as a preview with listed limitations; availability, plan eligibility (docs name Plus and Pro, Go observed only) and terms may change or be withdrawn. Review OpenAI's terms and brand/UI rules for an open-source distribution; the DevKit is under a **noncommercial** licence (do not copy its code unless the licence fits); confirm that a self-implemented client following the public docs is acceptable; ship the required UI wording and "Manage usage" link; confirm paid/hosted use stays out (waitlist applies). Do not claim Go support publicly until confirmed in writing. |
+| **Anthropic CLI/subscription policy** | The legal page forbids third parties from offering Claude login or routing requests through subscription credentials and says plan limits assume "ordinary, individual usage"; it does not address launching `claude -p` locally. Obtain Anthropic's answer before release; keep ADR-0006 constraints (no credential handling, unmodified binary); decide the product wording and the fallback (API-key Executor adapter) if the answer is unfavourable. |
+| **Windows trust** | Code signing and SmartScreen / Smart App Control behaviour for unsigned installers [doc]; WebView2 runtime handling for machines lacking it; updater signing if updates are added later. |
+| **Production security requirements** | See 15.5. |
+| **Reliability** | Token refresh and revocation verified; usage-limit handling verified; CLI error paths and version-compatibility matrix tested; process cleanup guaranteed (no orphan `claude`/tool processes after cancel or app crash). |
+| **Legal/compliance hygiene** | Third-party licences inventory (Tauri MIT/Apache-2.0, PixiJS MIT, rusqlite MIT, React MIT, plus dependencies); art/asset licences; privacy statement (prompts and outputs are sent to OpenAI and Anthropic and stored locally). |
+
+### 15.5 Production security requirements (proposed baseline)
+1. Credentials: OS credential facility or equivalent; owner-only permissions; atomic writes; tokens never logged, never in SQLite, never passed to the frontend; ID tokens sent only as `id_token_hint` to OpenAI; redact authorisation URLs in logs.
+2. OAuth: loopback listener bound to `127.0.0.1` only, `state`/`nonce`/PKCE per attempt, issued client ID kept per account, ID-token signature and claim validation, refresh serialised; sign-out revokes the refresh token.
+3. Tauri: minimal capabilities, a strict CSP, isolation pattern considered, no remote content, no frontend shell/fs/SQL permissions; only a narrow, typed command set (validated inputs) [doc: capability and CSP model].
+4. Processes: spawn only the discovered, signature-checked `claude.exe` with an explicit argument list, `shell:false`, scrubbed environment (no inherited session variables), always `--strict-mcp-config`, project directory confinement, process-tree termination and a Job Object so children die with the app.
+5. Approvals: default deny; the approval gate lives in the Rust core; approver bridge authenticated (per-run secret) and bound to the run; unanswered approvals time out to deny; show the exact action before approval.
+6. Untrusted data: agent output, tool inputs/results and model text are untrusted; render as text, never as markup; prompt-injection mitigation is the approval gate plus least-privilege policies.
+7. Data at rest: prompts and outputs may contain proprietary code; local only; retention limits; a "delete history" control; consider database encryption later (not an MVP requirement).
+8. Supply chain: pinned versions, lockfiles, `cargo audit`/`npm audit` in CI, no unreviewed install scripts.
+9. No telemetry; logs local, bounded and secret-redacted.
+10. Single instance; the second launch focuses the first window.

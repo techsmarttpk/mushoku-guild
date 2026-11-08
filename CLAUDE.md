@@ -45,7 +45,7 @@ Before any non-trivial change, read, in this order:
 
 ## 5. Coding standards
 
-Language and stack are **TBD** (see `docs/architecture.md`). Until chosen, these language-neutral rules apply; the chosen stack's idiomatic linter/formatter must be added in the foundation phase and then enforced.
+Stack (ADR-0010, accepted 2026-11-08): **Rust** (Tauri 2 core), **TypeScript + React** (UI), **PixiJS** (café scene), **SQLite** via rusqlite. Stack-specific tooling (rustfmt, clippy, ESLint/Prettier, TypeScript strict, test runners) is selected in Phase 2 task 2.7 and then enforced; until then these language-neutral rules apply.
 
 - Readable over clever. Small functions, clear names, one responsibility per module.
 - Comments explain *why*, not *what*.
@@ -97,7 +97,7 @@ Lightweight is a core requirement, not a nice-to-have.
 - Idle state should use near-zero CPU: no busy loops, event-driven updates, throttled rendering when the window is hidden or unfocused.
 - Be deliberate with memory: bounded logs/history, lazy-loaded assets, compressed sprites.
 - Keep installer size and dependency tree small.
-- Once a stack exists, measure idle/active CPU and RAM and record budgets and results in `docs/plan.md` / `docs/architecture.md`. Budgets are **TBD** until measured against a real baseline — do not invent numbers.
+- Resource budgets are **provisional engineering targets** (ADR-0012; `docs/architecture.md` §9). Measure, do not assume: record method, environment and numbers in `docs/plan.md` / `docs/architecture.md`, and never quote an unmeasured figure as a result. Stability and security take priority over any performance number. If a target is unrealistic, document the evidence and propose a revised target for the user's approval. Measure `claude.exe` consumption separately from Mushoku Guild's own.
 
 ## 10. Scope discipline
 

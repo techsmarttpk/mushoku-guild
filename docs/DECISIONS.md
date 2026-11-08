@@ -40,7 +40,7 @@ Template:
 - **Context:** The user requires that technologies not be selected prematurely and that trade-offs be evaluated, given strict lightweight constraints and the avoidance of heavy game engines.
 - **Decision:** No language, UI toolkit, runtime, storage engine or rendering approach is chosen yet. Selection happens in Phase 1 (Discovery) via a written evaluation, recorded in a later ADR.
 - **Alternatives considered:** Picking a familiar stack now (rejected: contradicts the user's instruction and risks violating the lightweight constraint).
-- **Consequences:** `docs/architecture.md` marks all stack items TBD. No implementation work begins until a stack ADR is accepted.
+- **Consequences:** `docs/architecture.md` marks all stack items TBD. No implementation work begins until a stack ADR is accepted. **Update 2026-11-08:** satisfied by ADR-0010; implementation still waits for the user's explicit Phase 2 start.
 
 ## ADR-0004: No application features during repository initialisation
 - **Date:** 2026-11-08
@@ -70,9 +70,41 @@ Template:
 
 ---
 
+## ADR-0010: Technology stack — Tauri 2, Rust core, TypeScript + React UI, PixiJS (WebGL), SQLite via rusqlite
+- **Date:** 2026-11-08 (proposed and accepted the same day after the user's review of the Phase 1 findings)
+- **Status:** accepted (by the user)
+- **Context:** ADR-0003 deferred the stack until evaluated. The user proposed Tauri 2, React + TypeScript, PixiJS, Rust and SQLite. The evaluation (`docs/architecture.md` §11) covered Windows, lightweight use, developer experience and the integration needs shown by the spikes (child processes with tree kill, loopback OAuth, SSE streaming, credential storage, SQLite). The Rust and C++ build toolchain is not installed on the development machine.
+- **Decision:** Adopt Tauri 2 (WebView2 on Windows) with a Rust core that owns the orchestrator, providers, processes, OAuth, credential storage and SQLite (rusqlite, `bundled`); a TypeScript + React frontend that is a thin projection of core events; PixiJS v8 with the WebGL renderer driven by a render-on-demand loop; NSIS installer. The frontend gets no shell, filesystem or SQL permissions.
+- **Alternatives considered:** Electron (bundles Chromium, contradicts the lightweight goal); .NET WPF/WinUI + SkiaSharp (possibly lighter and Windows-only; the named fallback); Rust-native egui/iced/Slint (weaker for sprite scenes); Godot or other engines (ruled out by the user); Qt/QML (licensing and tooling weight); Preact/Solid/Svelte instead of React (marginal gain, not chosen).
+- **Consequences:** Rust and MSVC build tools must be installed; Rust skills are required for the core; the product is Windows-first; Tauri's security model must be configured deliberately (minimal capabilities, strict CSP); `CLAUDE.md` names the stack; Phase 2 starts with a skeleton and a measurement step.
+- **Verification and revisit rule:** The Phase 2 measurement gate (`docs/plan.md` task 2.6) verifies the assumptions behind this decision (WebView2 footprint, hidden-window behaviour, Pixi idle behaviour). The stack is accepted; if the evidence shows it cannot meet the targets in ADR-0012 or compromises stability or security, the evidence must be documented and a revision (including the .NET + Skia fallback) proposed to the user. This ADR is changed only by a new, user-approved ADR that supersedes it.
+- **Known risks (unchanged):** WebView2 memory unmeasured; hidden-window suspension unverified in Tauri; PixiJS AnimatedSprite and render-on-demand unverified from docs; hybrid-GPU behaviour unverified.
+
+## ADR-0011: MVP scope
+- **Date:** 2026-11-08 (proposed and accepted the same day)
+- **Status:** accepted (by the user)
+- **Context:** The user asked for the smallest genuinely useful version demonstrating a working 2D café, ChatGPT as reasoning/prompt agent, Claude Code executing approved tasks via the native Windows CLI, real-time activity in the café, task history and persistence, and user-controlled permissions. Multiple simultaneous coding agents are not desired.
+- **Decision:** The MVP is requirements M1–M8 in `docs/context.md` §14: Windows only, single user, one project, one active task at a time, two initial agents (ChatGPT as Reasoner, Claude Code as Executor), real event-driven café animations (never simulated), SQLite task history, user-controlled execution and permissions with default deny, resource budgets per ADR-0012, NSIS installer. Everything in `docs/context.md` §14.3 is out of scope for the MVP.
+- **Alternatives considered:** A headless-only first release with no café (rejected: fails the product vision); an animated multi-agent guild (rejected: scope, budget and the user's wish to avoid concurrent agents); simulating agent activity to demo early (rejected: violates "real functional integrations").
+- **Consequences:** Providers beyond ChatGPT and Claude Code, diff/review tooling, customisation and cross-platform work are deferred. The provider abstraction (ADR-0009, still proposed) is to be proven by two real adapters rather than designed for many. Accepting this ADR does **not** accept ADR-0007, ADR-0008 or ADR-0009, and does **not** clear any release blocker (`docs/context.md` §15.4).
+
+## ADR-0012: Resource budgets as provisional engineering targets
+- **Date:** 2026-11-08 (proposed and accepted the same day, with the user's qualifications below)
+- **Status:** accepted (by the user) **as provisional engineering targets**, not as requirements met
+- **Context:** The user wants measurable CPU, RAM, startup and idle targets for a 16 GB laptop with a GTX 1650, without assuming multiple simultaneous agents. No measurement of the stack exists yet.
+- **Decision:** Adopt the v0 budget table in `docs/architecture.md` §9 as provisional targets (for example idle RAM ≤ 180 MB, idle CPU ≤ 2% focused and ≤ 0.3% hidden, cold start ≤ 2.5 s, installer ≤ 15 MB) with the listed hard limits, on the reference laptop, for the Mushoku Guild process tree. The user's qualifications are binding:
+  1. **Measure, do not assume.** No budget is considered met, and no figure is quoted as a result, without a recorded measurement.
+  2. **Stability and security take priority** over meeting any performance number. A target is never met by weakening approvals, isolation, credential handling, process cleanup or error handling.
+  3. **Unrealistic targets are revised with evidence.** If measurement shows a target is unrealistic, document the evidence (method, numbers, environment) and propose a revised target to the user; targets change only through a recorded, user-approved amendment to this ADR.
+  4. **Claude CLI consumption is measured separately.** `claude.exe` and its child processes are the user's tool and are reported separately from Mushoku Guild's own usage; budgets apply to Mushoku Guild only. Combined figures may be reported for information but are not budget inputs.
+- **Alternatives considered:** No numeric budgets (rejected: the requirement says measurable); tighter numbers copied from other apps (rejected: no baseline for this stack); including `claude.exe` in the budget (rejected: it dominates the total and is outside the app's control).
+- **Consequences:** The Phase 2 gate produces the first real measurements; performance regressions become test failures only for metrics with recorded baselines; the "lite" mode is a first-class feature.
+
+---
+
 ## Proposed (not decided)
 
-Nothing below is accepted. Each needs the user's agreement and, where noted, evidence first.
+Nothing below is accepted (ADR-0007, ADR-0008 and ADR-0009 remain open). Each needs the user's agreement and, where noted, evidence first. Accepting ADR-0010, ADR-0011 and ADR-0012 did not accept any of these.
 
 ### ADR-0007 (proposed): Use Sign in with ChatGPT plan usage as the ChatGPT route
 - **Date proposed:** 2026-11-08
@@ -99,7 +131,6 @@ Nothing below is accepted. Each needs the user's agreement and, where noted, evi
 - **Accept when:** The user reviews it and it is validated against both real adapters in Phase 3.
 
 ### Other candidate decisions (not yet drafted)
-- UI/runtime technology and rendering approach.
-- Local persistence approach and token storage mechanism.
+- Credential storage mechanism (Windows Credential Manager vs protected file).
 - Approval model granularity (prompt approval, run approval, per-tool approval via an MCP prompt tool).
 - Project licence for Mushoku Guild (affects any use of OpenAI DevKit code).
