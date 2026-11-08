@@ -23,7 +23,7 @@ Kenney's asset pages (CC0) refused scripted downloads (HTTP 403 to non-browser c
 Both licences were read in the downloaded `OFL.txt` files (copyright lines: VT323 Project Authors; Press Start 2P Project Authors). OFL permits bundling and use in applications with the licence text retained.
 
 ## Code dependencies
-Exact versions and reasons: `docs/architecture.md` §14 and `package.json` / `src-tauri/Cargo.toml`. Phase 3 additions: `rusqlite` (bundled SQLite, persistence), `keyring` (Windows Credential Manager), `ureq` (HTTPS client for the OpenAI endpoints), `sha2` + `base64` + `getrandom` (PKCE), `windows-sys` (Job Object for reliable child-process cleanup), `tauri-plugin-dialog` (native folder picker, called from Rust only).
+Exact versions and reasons: `docs/ARCHITECTURE.md` §14 and `package.json` / `src-tauri/Cargo.toml`. Phase 3 additions: `rusqlite` (bundled SQLite, persistence), `keyring` (Windows Credential Manager), `ureq` (HTTPS client for the OpenAI endpoints), `sha2` + `base64` + `getrandom` (PKCE), `windows-sys` (Job Object for reliable child-process cleanup), `tauri-plugin-dialog` (native folder picker, called from Rust only).
 
 Sprint 3 adds only original generated art (bookshelf, books, sign in `src/cafe/LibraryScene.ts`); no new third-party assets or fonts.
 

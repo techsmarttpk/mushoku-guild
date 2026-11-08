@@ -1,6 +1,6 @@
 # Phase 2 measurements (tasks 2.3–2.6)
 
-Raw data and method for the Phase 2 measurement gate. Everything here is **measured on one machine**; conclusions and the gate verdict are in `docs/architecture.md` §13 and `docs/plan.md`.
+Raw data and method for the Phase 2 measurement gate. Everything here is **measured on one machine**; conclusions and the gate verdict are in `docs/ARCHITECTURE.md` §13 and `docs/plan.md`.
 
 ## Environment (all runs)
 Windows 11 Home 10.0.26200; Intel Core i5-10300H (4 cores / 8 logical); 15.8 GB RAM; Intel UHD Graphics + NVIDIA GeForce GTX 1650 (hybrid); WebView2 runtime 157.0.4341.42; **on AC power**; Windows power scheme "Gaming"; other applications and a Claude Code session were running, so absolute CPU numbers include ordinary desktop background noise. One user, one machine, release build of the app (`src-tauri/target/release/mushoku-guild.exe`).

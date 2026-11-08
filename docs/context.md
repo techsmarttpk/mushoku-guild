@@ -81,7 +81,7 @@ The goal is to **automate this workflow**, removing the manual copy/paste handof
 
 ## 9. Current project status
 
-- **Phase:** Phase 1 (Discovery) **completed** 2026-11-08. **Phase 2 (Foundation) is in progress:** tasks 2.0–2.6 are complete and verified, including the measurement gate (`docs/architecture.md` §13); tasks 2.7–2.10 are on hold until the user reviews the gate. ADR-0010, ADR-0011 and ADR-0012 are accepted; ADR-0012 amendment A is **proposed**; ADR-0007, ADR-0008 and ADR-0009 remain proposed; every release blocker in §15.4 remains open.
+- **Phase:** Phase 1 (Discovery) **completed** 2026-11-08. **Phase 2 (Foundation) is in progress:** tasks 2.0–2.6 are complete and verified, including the measurement gate (`docs/ARCHITECTURE.md` §13); tasks 2.7–2.10 are on hold until the user reviews the gate. ADR-0010, ADR-0011 and ADR-0012 are accepted; ADR-0012 amendment A is **proposed**; ADR-0007, ADR-0008 and ADR-0009 remain proposed; every release blocker in §15.4 remains open.
 - Repository created at `https://github.com/techsmarttpk/mushoku-guild`, branch `main`.
 - Governance and design documents established.
 - **No application code exists. No technology has been chosen.**
@@ -150,7 +150,7 @@ Sources: official OpenAI and Anthropic pages fetched 2026-11-08 by research suba
 
 ### 11.4 Cross-provider implications
 
-- The ChatGPT route needs the full conversation history per request, no `max_output_tokens`/`temperature`, SSE streaming, and OAuth token lifecycle management. Claude Code needs a child process, NDJSON parsing and an approval channel. These differ enough that the abstraction separates **auth**, **role** and **transport** (see `docs/architecture.md` §6a).
+- The ChatGPT route needs the full conversation history per request, no `max_output_tokens`/`temperature`, SSE streaming, and OAuth token lifecycle management. Claude Code needs a child process, NDJSON parsing and an approval channel. These differ enough that the abstraction separates **auth**, **role** and **transport** (see `docs/ARCHITECTURE.md` §6a).
 
 ## 12. Spike result: ChatGPT authorization test (2026-11-08)
 
@@ -297,7 +297,7 @@ Status: **accepted by the user (ADR-0011, 2026-11-08).** Goal: the smallest vers
 | M4 | **Real-time activity in the café** | The scene and activity panel are driven only by real events from the two adapters (never simulated): the reasoner character reacts to ChatGPT streaming; the executor character reacts to `tool_use`, approvals and `result`. |
 | M5 | **Task history and persistence** | SQLite: tasks, prompt versions, steps, approvals and decisions, bounded event log, settings. History view with search by title/date, prompt/result detail, and re-run from a previous prompt. Credentials stored via the OS (Windows Credential Manager or equivalent — storage decision still open), never in SQLite or logs. |
 | M6 | **User-controlled permissions and execution** | Nothing runs without approval: (1) user approves the engineered prompt, (2) user approves starting execution with a visible policy (read-only / ask for each action / allow edits in project), (3) each pending tool action is shown for approve/deny through the approver bridge, (4) user can cancel at any time, (5) after completion the user accepts, rejects or requests changes (loops back to ChatGPT with the feedback). Default policy is deny. |
-| M7 | **Resource budgets met** | The measurement gate and budgets in `docs/architecture.md` §9 pass on the reference laptop. |
+| M7 | **Resource budgets met** | The measurement gate and budgets in `docs/ARCHITECTURE.md` §9 pass on the reference laptop. |
 | M8 | **Installable on Windows** | NSIS installer; unsigned acceptable for personal/developer use (signing is a release item, §15). |
 
 ### 14.2 MVP flow (single task)
@@ -357,14 +357,14 @@ Nothing here is resolved by this document; items are classified by when they mus
 
 ## 16. Phase 2 learned facts (tasks 2.0–2.6, 2026-11-08)
 
-Facts future sessions must not rediscover. Evidence and numbers: `docs/architecture.md` §12–§14 and `docs/measurements/phase2/`.
+Facts future sessions must not rediscover. Evidence and numbers: `docs/ARCHITECTURE.md` §12–§14 and `docs/measurements/phase2/`.
 
-- **Status:** Phase 2 tasks 2.0–2.6 are complete and verified; the measurement gate verdict is in `docs/architecture.md` §13.5 and awaits the user's review. Tasks 2.7–2.10 have not been started and must not start before that review.
+- **Status:** Phase 2 tasks 2.0–2.6 are complete and verified; the measurement gate verdict is in `docs/ARCHITECTURE.md` §13.5 and awaits the user's review. Tasks 2.7–2.10 have not been started and must not start before that review.
 - **WebView2 does not report minimise/hide to the page.** The Rust core publishes `window-minimized`; the scene stops on it. Never rely on `document.hidden` or `visibilitychange` for minimisation in this app.
 - **PixiJS v8 has two tickers.** `Ticker.system` (event polling) runs on `requestAnimationFrame` by default and costs about 1.7% of total CPU even for a static scene; it is stopped in every mode. Pixi's `maxFPS` does not stop the browser from waking at display rate, so idle animation must use timers, not a ticker.
 - **Memory must be judged by private working set.** Summed working sets of the 7 WebView2 processes (355 MB for a blank page) double-count shared pages.
 - **Default GPU is the discrete GTX 1650**, utilisation about 0%; forcing the iGPU did not help CPU and cost 25 MB private memory. Do not add GPU-preference hacks.
-- **Build environment:** Rust 1.99.1 and VS Build Tools live on `D:` (`C:` had only 12 GB free); builds need the VS developer environment until the optional registration repair in `docs/architecture.md` §12 is done by an elevated prompt. Tauri's NSIS download may time out on slow links: fetch the hash-pinned files manually (§13.3 F8).
+- **Build environment:** Rust 1.99.1 and VS Build Tools live on `D:` (`C:` had only 12 GB free); builds need the VS developer environment until the optional registration repair in `docs/ARCHITECTURE.md` §12 is done by an elevated prompt. Tauri's NSIS download may time out on slow links: fetch the hash-pinned files manually (§13.3 F8).
 - **Harness limits:** the measurement harness cannot reliably take OS focus away from the app (foreground lock); never use a synthetic Alt key tap (it stalls the WebView). Visible-but-unfocused behaviour is unmeasured.
 - **`bench.rs`, `src/bench.ts` and the `bench_*` IPC commands are Phase 2 measurement fixtures, not product code.** They are inert without `MUSHOKU_BENCH_OUT`. Remove or gate them before Phase 3 begins.
 - **Open questions added:** whether to accept ADR-0012 amendment A; whether to exercise WebView2 `TrySuspend`/`MemoryUsageTargetLevel` later (reachable, untested); first-ever-launch and cold-boot start-up; whether the app should hide to tray (then it knows it is hidden).

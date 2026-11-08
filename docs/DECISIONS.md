@@ -30,7 +30,7 @@ Template:
 - **Date:** 2026-11-08
 - **Status:** accepted
 - **Context:** Work will be done across many Claude Code sessions with no shared memory; the project needs persistent rules, context, design and progress tracking before any code.
-- **Decision:** Maintain six documents (location amended by ADR-0005: only `CLAUDE.md` stays at the root; the rest live in `docs/`): `CLAUDE.md` (engineering constitution), `docs/context.md` (working memory), `docs/DECISIONS.md` (this log), `docs/architecture.md`, `docs/system-design.md`, `docs/plan.md` (single source of truth for progress). Claude Code reads them before substantial changes and updates them with the work.
+- **Decision:** Maintain six documents (location amended by ADR-0005: only `CLAUDE.md` stays at the root; the rest live in `docs/`): `CLAUDE.md` (engineering constitution), `docs/context.md` (working memory), `docs/DECISIONS.md` (this log), `docs/ARCHITECTURE.md`, `docs/system-design.md`, `docs/plan.md` (single source of truth for progress). Claude Code reads them before substantial changes and updates them with the work.
 - **Alternatives considered:** Fewer, combined documents (rejected: different update cadences and audiences); a `docs/` subfolder (not chosen: user specified repository root).
 - **Consequences:** Documentation maintenance is part of every task. Documents must stay mutually consistent.
 
@@ -40,7 +40,7 @@ Template:
 - **Context:** The user requires that technologies not be selected prematurely and that trade-offs be evaluated, given strict lightweight constraints and the avoidance of heavy game engines.
 - **Decision:** No language, UI toolkit, runtime, storage engine or rendering approach is chosen yet. Selection happens in Phase 1 (Discovery) via a written evaluation, recorded in a later ADR.
 - **Alternatives considered:** Picking a familiar stack now (rejected: contradicts the user's instruction and risks violating the lightweight constraint).
-- **Consequences:** `docs/architecture.md` marks all stack items TBD. No implementation work begins until a stack ADR is accepted. **Update 2026-11-08:** satisfied by ADR-0010; implementation still waits for the user's explicit Phase 2 start.
+- **Consequences:** `docs/ARCHITECTURE.md` marks all stack items TBD. No implementation work begins until a stack ADR is accepted. **Update 2026-11-08:** satisfied by ADR-0010; implementation still waits for the user's explicit Phase 2 start.
 
 ## ADR-0004: No application features during repository initialisation
 - **Date:** 2026-11-08
@@ -54,7 +54,7 @@ Template:
 - **Date:** 2026-11-08
 - **Status:** accepted
 - **Context:** ADR-0002 placed all six documents in the repository root. The user wants a tidier root while keeping `CLAUDE.md` auto-discoverable by Claude Code.
-- **Decision:** `CLAUDE.md` stays at the repository root. `context.md`, `DECISIONS.md`, `architecture.md`, `system-design.md` and `plan.md` live in `docs/`. This amends the location part of ADR-0002 (which otherwise stands).
+- **Decision:** `CLAUDE.md` stays at the repository root. `context.md`, `DECISIONS.md`, `ARCHITECTURE.md`, `system-design.md` and `plan.md` live in `docs/`. This amends the location part of ADR-0002 (which otherwise stands).
 - **Alternatives considered:** Leaving everything in the root (rejected by the user); moving `CLAUDE.md` too (rejected: breaks automatic discovery).
 - **Consequences:** All cross-references use `docs/<file>.md` paths. `CLAUDE.md` lists where each document lives.
 
@@ -73,12 +73,12 @@ Template:
 ## ADR-0010: Technology stack — Tauri 2, Rust core, TypeScript + React UI, PixiJS (WebGL), SQLite via rusqlite
 - **Date:** 2026-11-08 (proposed and accepted the same day after the user's review of the Phase 1 findings)
 - **Status:** accepted (by the user)
-- **Context:** ADR-0003 deferred the stack until evaluated. The user proposed Tauri 2, React + TypeScript, PixiJS, Rust and SQLite. The evaluation (`docs/architecture.md` §11) covered Windows, lightweight use, developer experience and the integration needs shown by the spikes (child processes with tree kill, loopback OAuth, SSE streaming, credential storage, SQLite). The Rust and C++ build toolchain is not installed on the development machine.
+- **Context:** ADR-0003 deferred the stack until evaluated. The user proposed Tauri 2, React + TypeScript, PixiJS, Rust and SQLite. The evaluation (`docs/ARCHITECTURE.md` §11) covered Windows, lightweight use, developer experience and the integration needs shown by the spikes (child processes with tree kill, loopback OAuth, SSE streaming, credential storage, SQLite). The Rust and C++ build toolchain is not installed on the development machine.
 - **Decision:** Adopt Tauri 2 (WebView2 on Windows) with a Rust core that owns the orchestrator, providers, processes, OAuth, credential storage and SQLite (rusqlite, `bundled`); a TypeScript + React frontend that is a thin projection of core events; PixiJS v8 with the WebGL renderer driven by a render-on-demand loop; NSIS installer. The frontend gets no shell, filesystem or SQL permissions.
 - **Alternatives considered:** Electron (bundles Chromium, contradicts the lightweight goal); .NET WPF/WinUI + SkiaSharp (possibly lighter and Windows-only; the named fallback); Rust-native egui/iced/Slint (weaker for sprite scenes); Godot or other engines (ruled out by the user); Qt/QML (licensing and tooling weight); Preact/Solid/Svelte instead of React (marginal gain, not chosen).
 - **Consequences:** Rust and MSVC build tools must be installed; Rust skills are required for the core; the product is Windows-first; Tauri's security model must be configured deliberately (minimal capabilities, strict CSP); `CLAUDE.md` names the stack; Phase 2 starts with a skeleton and a measurement step.
 - **Verification and revisit rule:** The Phase 2 measurement gate (`docs/plan.md` task 2.6) verifies the assumptions behind this decision (WebView2 footprint, hidden-window behaviour, Pixi idle behaviour). The stack is accepted; if the evidence shows it cannot meet the targets in ADR-0012 or compromises stability or security, the evidence must be documented and a revision (including the .NET + Skia fallback) proposed to the user. This ADR is changed only by a new, user-approved ADR that supersedes it.
-- **Known risks (updated after the Phase 2 gate, `docs/architecture.md` §13):** WebView2 memory measured (84 MB private for a blank page, 90–96 MB for the scene; the summed working set metric is misleading); WebView2 does not report minimise/hide to the page (worked around with a Rust event); Pixi's internal system ticker and any `requestAnimationFrame` loop cost about 1.7% CPU (handled in the scene controller); AnimatedSprite stepping and render-on-demand verified; discrete GPU used by default (utilisation about 0%). Still open: memory growth over hours, `TrySuspend` benefit, real-world numbers with providers and SQLite.
+- **Known risks (updated after the Phase 2 gate, `docs/ARCHITECTURE.md` §13):** WebView2 memory measured (84 MB private for a blank page, 90–96 MB for the scene; the summed working set metric is misleading); WebView2 does not report minimise/hide to the page (worked around with a Rust event); Pixi's internal system ticker and any `requestAnimationFrame` loop cost about 1.7% CPU (handled in the scene controller); AnimatedSprite stepping and render-on-demand verified; discrete GPU used by default (utilisation about 0%). Still open: memory growth over hours, `TrySuspend` benefit, real-world numbers with providers and SQLite.
 
 ## ADR-0011: MVP scope
 - **Date:** 2026-11-08 (proposed and accepted the same day)
@@ -92,14 +92,14 @@ Template:
 - **Date:** 2026-11-08 (proposed and accepted the same day, with the user's qualifications below)
 - **Status:** accepted (by the user) **as provisional engineering targets**, not as requirements met
 - **Context:** The user wants measurable CPU, RAM, startup and idle targets for a 16 GB laptop with a GTX 1650, without assuming multiple simultaneous agents. No measurement of the stack exists yet.
-- **Decision:** Adopt the v0 budget table in `docs/architecture.md` §9 as provisional targets (for example idle RAM ≤ 180 MB, idle CPU ≤ 2% focused and ≤ 0.3% hidden, cold start ≤ 2.5 s, installer ≤ 15 MB) with the listed hard limits, on the reference laptop, for the Mushoku Guild process tree. The user's qualifications are binding:
+- **Decision:** Adopt the v0 budget table in `docs/ARCHITECTURE.md` §9 as provisional targets (for example idle RAM ≤ 180 MB, idle CPU ≤ 2% focused and ≤ 0.3% hidden, cold start ≤ 2.5 s, installer ≤ 15 MB) with the listed hard limits, on the reference laptop, for the Mushoku Guild process tree. The user's qualifications are binding:
   1. **Measure, do not assume.** No budget is considered met, and no figure is quoted as a result, without a recorded measurement.
   2. **Stability and security take priority** over meeting any performance number. A target is never met by weakening approvals, isolation, credential handling, process cleanup or error handling.
   3. **Unrealistic targets are revised with evidence.** If measurement shows a target is unrealistic, document the evidence (method, numbers, environment) and propose a revised target to the user; targets change only through a recorded, user-approved amendment to this ADR.
   4. **Claude CLI consumption is measured separately.** `claude.exe` and its child processes are the user's tool and are reported separately from Mushoku Guild's own usage; budgets apply to Mushoku Guild only. Combined figures may be reported for information but are not budget inputs.
 - **Alternatives considered:** No numeric budgets (rejected: the requirement says measurable); tighter numbers copied from other apps (rejected: no baseline for this stack); including `claude.exe` in the budget (rejected: it dominates the total and is outside the app's control).
-- **Phase 2 gate result (2026-11-08):** measured; RAM as literally defined fails, everything else measured passes. Evidence and the proposed amendment A: `docs/architecture.md` §13 and the entry under "Proposed" below. **No change to this ADR has been made.**
-- **Amendment A (ACCEPTED 2026-11-08 by the owner):** the memory budget metric is the **private working set of the Mushoku Guild process tree** (app + WebView2 processes; `claude.exe` still excluded and measured separately). Targets: **idle <= 120 MB, active <= 140 MB** (hard limits 150 / 180 MB). The original figures (180/260 MB summed working set) are kept above as the original wording. Evidence for the change: a blank Tauri + WebView2 page already sums to 355 MB of working sets because the seven WebView2 processes share pages, so the summed metric double-counts and cannot be met by any app on this stack; the measured private working set is 84 MB blank / 90 MB idle / 96 MB active (`docs/architecture.md` §13, `docs/measurements/phase2/`). Summed working set is still reported next to it. Two design rules from measurement are adopted: no `requestAnimationFrame` loop in idle states, and all renderer tickers stopped when minimised. Open metrics: 8 h memory growth, idle disk writes, visible-but-unfocused CPU, first-launch start-up.
+- **Phase 2 gate result (2026-11-08):** measured; RAM as literally defined fails, everything else measured passes. Evidence and the proposed amendment A: `docs/ARCHITECTURE.md` §13 and the entry under "Proposed" below. **No change to this ADR has been made.**
+- **Amendment A (ACCEPTED 2026-11-08 by the owner):** the memory budget metric is the **private working set of the Mushoku Guild process tree** (app + WebView2 processes; `claude.exe` still excluded and measured separately). Targets: **idle <= 120 MB, active <= 140 MB** (hard limits 150 / 180 MB). The original figures (180/260 MB summed working set) are kept above as the original wording. Evidence for the change: a blank Tauri + WebView2 page already sums to 355 MB of working sets because the seven WebView2 processes share pages, so the summed metric double-counts and cannot be met by any app on this stack; the measured private working set is 84 MB blank / 90 MB idle / 96 MB active (`docs/ARCHITECTURE.md` §13, `docs/measurements/phase2/`). Summed working set is still reported next to it. Two design rules from measurement are adopted: no `requestAnimationFrame` loop in idle states, and all renderer tickers stopped when minimised. Open metrics: 8 h memory growth, idle disk writes, visible-but-unfocused CPU, first-launch start-up.
 - **Consequences:** The Phase 2 gate produces the first real measurements; performance regressions become test failures only for metrics with recorded baselines; the "lite" mode is a first-class feature.
 
 ---
@@ -127,14 +127,14 @@ Template:
 
 ### ADR-0009 (proposed): Provider abstraction with separate auth, role and capability interfaces
 - **Date proposed:** 2026-11-08
-- **Context:** See `docs/architecture.md` §6a.
+- **Context:** See `docs/ARCHITECTURE.md` §6a.
 - **Proposed decision:** Two provider roles (Reasoner for prompt engineering, Executor for task execution), a separate auth interface, a shared error taxonomy, and a registry, so new providers (for example DeepSeek) are adapters only.
 - **Alternatives considered:** One universal "Agent" interface (the earlier sketch), which mixes streaming chat with long-running tool-using jobs and forces a lowest-common-denominator design.
 - **Accept when:** The user reviews it and it is validated against both real adapters in Phase 3.
 - **Status (2026-11-08):** implemented in Phase 3 as the smallest boundary that works (separate Rust modules `chatgpt` for the Reasoner and `claude` for the Executor, a shared error taxonomy); no registry or plugin system. Accepted for implementation by the owner's Phase 3 instruction.
 
 ### ADR-0012 amendment A (ACCEPTED 2026-11-08 — moved to ADR-0012 below)
-- **Date proposed:** 2026-11-08 (Phase 2 measurement gate, `docs/architecture.md` §13)
+- **Date proposed:** 2026-11-08 (Phase 2 measurement gate, `docs/ARCHITECTURE.md` §13)
 - **Context:** ADR-0012 asks to document evidence and propose a revised target when a target proves unrealistic. The gate measured the RAM targets as literally defined (sum of working sets of the process tree) at 371 MB idle and 377 MB active, against 180/260 MB targets and 250/350 MB limits. A **blank** Tauri + WebView2 page, with no Pixi at all, already sums to 355 MB, because the seven WebView2 processes share most of their pages. By **private** working set the same measurements are 84 MB (blank), 90 MB (idle) and 96 MB (active). So the targets cannot be met by any application on this stack with this metric, while the actual memory the app adds is small.
 - **Proposed change (measurements are on one machine, three runs per state):**
   1. Make **private working set of the Mushoku Guild process tree** the memory budget metric. Always report the summed working set next to it for transparency.

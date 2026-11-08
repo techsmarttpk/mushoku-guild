@@ -26,7 +26,7 @@ Before any non-trivial change, read, in this order:
 
 1. `docs/context.md` — purpose, confirmed requirements, open questions
 2. `docs/DECISIONS.md` — what has been decided (and what has not)
-3. `docs/architecture.md` — components and stack
+3. `docs/ARCHITECTURE.md` — components and stack
 4. `docs/system-design.md` — HLD and LLD
 5. `docs/plan.md` — current phase, status, next tasks
 
@@ -60,7 +60,7 @@ Stack (ADR-0010, accepted 2026-11-08): **Rust** (Tauri 2 core), **TypeScript + R
 
 - Documentation is part of the work, not an afterthought.
 - Update docs **in the same change** whenever any of these change:
-  - architecture or components → `docs/architecture.md` (and `docs/system-design.md` if interfaces/models change)
+  - architecture or components → `docs/ARCHITECTURE.md` (and `docs/system-design.md` if interfaces/models change)
   - a decision is made, changed or reversed → `docs/DECISIONS.md` (append; supersede, don't erase)
   - requirements, status, or learned facts → `docs/context.md`
   - task progress → `docs/plan.md` (immediately after meaningful work)
@@ -97,7 +97,7 @@ Lightweight is a core requirement, not a nice-to-have.
 - Idle state should use near-zero CPU: no busy loops, event-driven updates, throttled rendering when the window is hidden or unfocused.
 - Be deliberate with memory: bounded logs/history, lazy-loaded assets, compressed sprites.
 - Keep installer size and dependency tree small.
-- Resource budgets are **provisional engineering targets** (ADR-0012; `docs/architecture.md` §9). Measure, do not assume: record method, environment and numbers in `docs/plan.md` / `docs/architecture.md`, and never quote an unmeasured figure as a result. Stability and security take priority over any performance number. If a target is unrealistic, document the evidence and propose a revised target for the user's approval. Measure `claude.exe` consumption separately from Mushoku Guild's own.
+- Resource budgets are **provisional engineering targets** (ADR-0012; `docs/ARCHITECTURE.md` §9). Measure, do not assume: record method, environment and numbers in `docs/plan.md` / `docs/ARCHITECTURE.md`, and never quote an unmeasured figure as a result. Stability and security take priority over any performance number. If a target is unrealistic, document the evidence and propose a revised target for the user's approval. Measure `claude.exe` consumption separately from Mushoku Guild's own.
 
 ## 10. Scope discipline
 

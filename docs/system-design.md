@@ -75,7 +75,7 @@ flowchart TB
 
 ## 1.7 Major components
 
-See `docs/architecture.md` §2. Summary: UI shell, café renderer, orchestrator, agent adapters, event bus, approval gate, store, config/secrets, logger.
+See `docs/ARCHITECTURE.md` §2. Summary: UI shell, café renderer, orchestrator, agent adapters, event bus, approval gate, store, config/secrets, logger.
 
 ## 1.8 Integration points
 
@@ -126,7 +126,7 @@ Dependency rule: `ui` → `core`; `core` never imports `ui`; adapters never impo
 
 ## 2.2 Proposed interfaces (provider abstraction — PROPOSED, ADR-0009)
 
-Pseudo-notation, not a language choice. Rationale and diagram: `docs/architecture.md` §6a.
+Pseudo-notation, not a language choice. Rationale and diagram: `docs/ARCHITECTURE.md` §6a.
 
 ```
 ProviderInfo {
@@ -327,7 +327,7 @@ Retention: configurable; default keep full task/prompt/approval rows indefinitel
 
 - **Commands (UI → core)**, each validated in Rust: `create_task`, `approve_prompt`, `edit_prompt`, `request_prompt_revision`, `start_run(policy)`, `decide_approval(id, allow|deny)`, `cancel_task`, `accept_result`, `request_changes`, `list_history`, `get_task`, `sign_in(provider)`, `sign_out(provider)`, `get_provider_status`, `get_settings` / `set_setting`. No generic shell, filesystem or SQL command exists.
 - **Streams (core → UI)**: a single ordered Tauri Channel carrying typed `CoreEvent`s (`TaskStatusChanged`, `PromptDelta`, `RunOutput`, `ToolActivity`, `ApprovalRequested`, `ProviderStatusChanged`, `UsageUpdated`, `Error`). Token/tool deltas are coalesced in the core (for example at most one batch per 33 ms) because Tauri events are not designed for high throughput and ordering [doc].
-- **Implemented in Phase 2 (verified, `docs/architecture.md` §13):** the Rust core publishes `window-minimized` (WebView2 does not report minimisation to the page); the scene controller has three regimes — stopped (nothing scheduled), ambient (a timer changes the idle pose about 3 times per second and draws only then; no `requestAnimationFrame` loop) and active (Pixi's shared ticker capped at 30 fps, drawing only on change); Pixi's internal system ticker stays stopped. The proposed reducer below is **not implemented yet**; today only the measurement fixtures drive the scene.
+- **Implemented in Phase 2 (verified, `docs/ARCHITECTURE.md` §13):** the Rust core publishes `window-minimized` (WebView2 does not report minimisation to the page); the scene controller has three regimes — stopped (nothing scheduled), ambient (a timer changes the idle pose about 3 times per second and draws only then; no `requestAnimationFrame` loop) and active (Pixi's shared ticker capped at 30 fps, drawing only on change); Pixi's internal system ticker stays stopped. The proposed reducer below is **not implemented yet**; today only the measurement fixtures drive the scene.
 - **Scene projection**: the UI keeps a small reducer `CoreEvent → SceneState` (per character: `idle | thinking | waiting | working | blocked | done`, plus order-ticket state). The PixiJS controller subscribes to `SceneState` changes only, runs the ticker only while some animation is active, and stops it when the window is hidden, minimised or unfocused. The plain-text activity panel renders from the same events, so it is the accessible equivalent of the scene.
 - **Back-pressure and bounds**: the UI retains a bounded window of recent events per task; full history is fetched from SQLite on demand.
 - **Error surface**: every `ProviderError` kind (`docs/system-design.md` §2.2) maps to one user-facing message and, where useful, a single recovery action (sign in again, open "Manage usage", re-run preflight).
