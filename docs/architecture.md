@@ -1,6 +1,6 @@
 # architecture.md — Mushoku Guild Architecture
 
-> **Status: PROPOSED.** Nothing here is implemented. This document describes the intended shape of the system and is the starting point for Discovery. It must evolve with the real implementation. Items marked **TBD** are undecided (see `DECISIONS.md`, ADR-0003).
+> **Status: PROPOSED.** Nothing here is implemented. This document describes the intended shape of the system and is the starting point for Discovery. It must evolve with the real implementation. Items marked **TBD** are undecided (see `docs/DECISIONS.md`, ADR-0003).
 
 ## 1. System overview
 
@@ -42,7 +42,7 @@ Core idea: **a small, headless orchestration core** (tasks, handoffs, approvals,
 | Packaging / installer | TBD |
 | Test framework | TBD |
 
-Selection criteria (from confirmed constraints): low idle CPU, low RAM, small install size, ease of spawning/streaming from subprocesses, Windows support, maintainability by a small team. Evaluation happens in `plan.md` Phase 1.
+Selection criteria (from confirmed constraints): low idle CPU, low RAM, small install size, ease of spawning/streaming from subprocesses, Windows support, maintainability by a small team. Evaluation happens in `docs/plan.md` Phase 1.
 
 ## 4. Component interactions
 
@@ -107,18 +107,18 @@ Generalisation to arbitrary agent graphs is **not** in scope until a second real
 5. Events are appended to the store (if persistence is adopted) and fanned out to the UI.
 6. The renderer maps events to scene state (e.g. character busy/idle, order progress).
 
-Event and entity details: `system-design.md`.
+Event and entity details: `docs/system-design.md`.
 
 ## 8. Deployment architecture
 
-- Single local desktop process (plus child processes for agents). No server component, no cloud backend assumed (assumption A4 in `context.md`).
+- Single local desktop process (plus child processes for agents). No server component, no cloud backend assumed (assumption A4 in `docs/context.md`).
 - Target platform: Windows 11 at minimum; others TBD.
 - Distribution/installer/updates: TBD.
 
 ## 9. Resource budget
 
-Targets: **TBD**. Budgets will be set after measuring a baseline in the Discovery spike, then recorded here and in `plan.md`. Design rules that apply regardless: event-driven (no polling loops), render throttling when unfocused, bounded in-memory logs, lazily loaded assets.
+Targets: **TBD**. Budgets will be set after measuring a baseline in the Discovery spike, then recorded here and in `docs/plan.md`. Design rules that apply regardless: event-driven (no polling loops), render throttling when unfocused, bounded in-memory logs, lazily loaded assets.
 
 ## 10. Open architectural questions
 
-See `context.md` §8. Notable: whether the orchestrator and renderer share a process, how agents are sandboxed/permissioned, and the persistence model.
+See `docs/context.md` §8. Notable: whether the orchestrator and renderer share a process, how agents are sandboxed/permissioned, and the persistence model.

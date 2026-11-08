@@ -1,6 +1,6 @@
 # context.md — Mushoku Guild Long-Term Context
 
-Working memory for the project. Future sessions must read this first. Every item is labelled **[Confirmed]**, **[Assumption]** or **[Open]**. Do not promote assumptions to requirements without the user's agreement (record in `DECISIONS.md`).
+Working memory for the project. Future sessions must read this first. Every item is labelled **[Confirmed]**, **[Assumption]** or **[Open]**. Do not promote assumptions to requirements without the user's agreement (record in `docs/DECISIONS.md`).
 
 _Last updated: 2026-11-08 (repository initialisation)._
 
@@ -79,15 +79,15 @@ The goal is to **automate this workflow**, removing the manual copy/paste handof
 
 ## 9. Current project status
 
-- **Phase:** 0 — Repository initialisation (see `plan.md`).
+- **Phase:** 0 — Repository initialisation (see `docs/plan.md`).
 - Repository created at `https://github.com/techsmarttpk/mushoku-guild`, branch `main`.
 - Governance and design documents established.
 - **No application code exists. No technology has been chosen. No integration has been tested.**
 
 ## 10. Things future sessions must retain
 
-- Documentation-first: no implementation until the user asks and the discovery phase's exit criteria in `plan.md` are met.
+- Documentation-first: no implementation until the user asks and the discovery phase's exit criteria in `docs/plan.md` are met.
 - Do not claim integrations work until tested against the real agent.
-- Tech stack selection requires a written trade-off evaluation and a `DECISIONS.md` entry.
+- Tech stack selection requires a written trade-off evaluation and a `docs/DECISIONS.md` entry.
 - Lightweight is a hard constraint; don't add a heavy engine or framework casually.
 - The user's environment: Windows 11, Git Bash/PowerShell, working directory `D:\Projects\mushoku-guild`.

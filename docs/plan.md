@@ -29,18 +29,18 @@
 
 - **Status:** completed
 - **Objective:** Establish the repository and the documentation/governance foundation.
-- **Deliverables:** GitHub repo with `main`; `CLAUDE.md`, `context.md`, `DECISIONS.md`, `architecture.md`, `system-design.md`, `plan.md`.
+- **Deliverables:** GitHub repo with `main`; `CLAUDE.md`, `docs/context.md`, `docs/DECISIONS.md`, `docs/architecture.md`, `docs/system-design.md`, `docs/plan.md`.
 - **Dependencies:** None.
 - **Tasks:**
   - [x] Inspect directory and Git state (empty directory, no repo)
   - [x] `git init`, set `origin` to the GitHub URL, branch `main`
   - [x] Create initial commit (`.gitignore`) and push; verified `origin/main` set up
   - [x] Write `CLAUDE.md`
-  - [x] Write `context.md`
-  - [x] Write `DECISIONS.md`
-  - [x] Write `architecture.md`
-  - [x] Write `system-design.md`
-  - [x] Write `plan.md`
+  - [x] Write `docs/context.md`
+  - [x] Write `docs/DECISIONS.md`
+  - [x] Write `docs/architecture.md`
+  - [x] Write `docs/system-design.md`
+  - [x] Write `docs/plan.md`
   - [x] Commit and push documentation; verified remote `main` = local HEAD (823d1bb) and lists all six files
 - **Acceptance criteria:** Remote `main` contains all six documents; documents are mutually consistent; no application code exists.
 - **Testing requirements:** Compare local `HEAD` with `origin/main`; re-read documents for contradictions.
@@ -50,7 +50,7 @@
 ## Phase 1 — Discovery & feasibility
 
 - **Status:** planned
-- **Objective:** Answer the open questions in `context.md` §8 and choose a stack with evidence.
+- **Objective:** Answer the open questions in `docs/context.md` §8 and choose a stack with evidence.
 - **Deliverables:** Written stack trade-off evaluation; integration spike findings; accepted ADRs; MVP scope definition; resource budgets.
 - **Dependencies:** Phase 0 complete; user available for scope questions.
 - **Tasks:**
@@ -60,8 +60,8 @@
   - [ ] Document findings and which integration paths actually worked
   - [ ] Evaluate candidate UI/runtime/rendering stacks against constraints; measure idle CPU/RAM for a hello-world of each shortlisted option
   - [ ] Decide stack → ADR (needs user agreement)
-  - [ ] Set resource budgets from measured baselines → record in `architecture.md`
-  - [ ] Define MVP scope and update `context.md`, `system-design.md`
+  - [ ] Set resource budgets from measured baselines → record in `docs/architecture.md`
+  - [ ] Define MVP scope and update `docs/context.md`, `docs/system-design.md`
   - [ ] Reconcile and refine Phases 2–7 of this plan
 - **Acceptance criteria:** Stack ADR `accepted`; both integration routes either proven by a spike or explicitly rejected/replaced; MVP scope written and agreed.
 - **Testing requirements:** Spikes are run for real; results (including failures) recorded verbatim in notes; measurements reproducible.
@@ -159,3 +159,4 @@
 ## Change log
 
 - 2026-11-08 — Plan created during repository initialisation. Phase 0 completed and verified on remote.
+- 2026-11-08 — Documentation moved from repository root to `docs/` (ADR-0005); `CLAUDE.md` remains in root. Phase 0 status unchanged (completed). Task names above refer to the files by their original creation.

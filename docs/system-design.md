@@ -1,6 +1,6 @@
 # system-design.md — Mushoku Guild System Design
 
-> **Status: PROPOSED.** Nothing described here is implemented. Sections labelled *Confirmed* derive from the user's stated requirements (`context.md`); everything else is a proposal for Discovery to validate. Technology is TBD, so interfaces are written in language-neutral pseudo-notation.
+> **Status: PROPOSED.** Nothing described here is implemented. Sections labelled *Confirmed* derive from the user's stated requirements (`docs/context.md`); everything else is a proposal for Discovery to validate. Technology is TBD, so interfaces are written in language-neutral pseudo-notation.
 
 ---
 
@@ -75,7 +75,7 @@ flowchart TB
 
 ## 1.7 Major components
 
-See `architecture.md` §2. Summary: UI shell, café renderer, orchestrator, agent adapters, event bus, approval gate, store, config/secrets, logger.
+See `docs/architecture.md` §2. Summary: UI shell, café renderer, orchestrator, agent adapters, event bus, approval gate, store, config/secrets, logger.
 
 ## 1.8 Integration points
 
@@ -219,4 +219,4 @@ Structured local logs with levels, rotation and size cap; secrets redacted. Per-
 
 ## 2.12 Testing strategy (proposed)
 
-Unit tests for the state machine and approval gate; contract tests for adapters using a fake agent; at least one manual or automated end-to-end test against the real Claude Code before any integration is marked verified; resource measurements recorded in `plan.md`.
+Unit tests for the state machine and approval gate; contract tests for adapters using a fake agent; at least one manual or automated end-to-end test against the real Claude Code before any integration is marked verified; resource measurements recorded in `docs/plan.md`.
