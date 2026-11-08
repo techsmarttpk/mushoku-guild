@@ -14,9 +14,9 @@
       {
         "label": "main",
         "title": "Mushoku Guild",
-        "width": 960,
-        "height": 640,
-        "minWidth": 640,
+        "width": 1240,
+        "height": 800,
+        "minWidth": 900,
         "minHeight": 480
       }
     ],
