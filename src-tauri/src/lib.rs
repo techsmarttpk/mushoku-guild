@@ -4,6 +4,7 @@ mod claude;
 mod commands;
 mod db;
 mod events;
+mod project_context;
 mod secrets;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,6 +63,7 @@ pub fn run() {
             commands::settings_set,
             commands::project_pick,
             commands::project_select,
+            commands::project_context,
             commands::task_list,
             commands::task_create,
             commands::task_get,

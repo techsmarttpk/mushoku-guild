@@ -59,7 +59,7 @@ pub fn locate(override_path: Option<&str>) -> Option<PathBuf> {
 }
 
 /// Runs a short command and returns stdout, killing it after `limit`.
-fn capture(mut cmd: Command, limit: Duration) -> Option<(i32, String)> {
+pub fn capture(mut cmd: Command, limit: Duration) -> Option<(i32, String)> {
     hidden(&mut cmd);
     let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
     let mut out = child.stdout.take()?;
@@ -167,6 +167,22 @@ fn is_session_var(k: &str) -> bool {
 /// The parent environment minus inherited Claude session variables and API-billing credentials.
 pub fn clean_env_pairs() -> Vec<(String, String)> {
     std::env::vars().filter(|(k, _)| !is_session_var(k)).collect()
+}
+
+// ---------------------------------------------------------------- model selection
+
+/// Models offered in the UI. Claude Code stays the authority on what the account may use.
+pub const MODEL_CHOICES: [&str; 4] = ["sonnet", "opus", "haiku", "default"];
+pub const DEFAULT_MODEL: &str = "sonnet";
+
+/// Maps the stored setting to the `--model` value. None = "CLI default": no override is passed.
+/// Unset or unrecognised values fall back to Sonnet (never silently to Opus).
+pub fn resolve_model(setting: Option<&str>) -> Option<&'static str> {
+    match setting.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Some(DEFAULT_MODEL),
+        Some("default") => None,
+        Some(s) => MODEL_CHOICES.iter().copied().find(|m| *m == s && *m != "default").or(Some(DEFAULT_MODEL)),
+    }
 }
 
 // ---------------------------------------------------------------- policies
@@ -796,6 +812,20 @@ mod tests {
         assert_eq!(r[0].kind, "tool_error");
         assert!(r[0].title.starts_with("Bash"));
         assert!(normalize(&json!({"type":"mystery"}), &mut tools).is_empty());
+    }
+
+    #[test]
+    fn model_selection_defaults_to_sonnet_and_cli_default_passes_nothing() {
+        assert_eq!(resolve_model(None), Some("sonnet"));
+        assert_eq!(resolve_model(Some("")), Some("sonnet"));
+        assert_eq!(resolve_model(Some("opus")), Some("opus"));
+        assert_eq!(resolve_model(Some("haiku")), Some("haiku"));
+        assert_eq!(resolve_model(Some("default")), None);
+        assert_eq!(resolve_model(Some("claude-opus-5-5 --evil")), Some("sonnet"));
+        let with = build_args(Policy::AskEach, Path::new("c"), resolve_model(Some("haiku")).unwrap_or(""), 5);
+        assert!(with.windows(2).any(|w| w == ["--model", "haiku"]));
+        let without = build_args(Policy::AskEach, Path::new("c"), resolve_model(Some("default")).unwrap_or(""), 5);
+        assert!(!without.contains(&"--model".to_string()));
     }
 
     #[test]

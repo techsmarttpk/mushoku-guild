@@ -5,6 +5,7 @@ import type {
   AppEvent,
   ChatGptStatus,
   ClaudeInfo,
+  ContextInfo,
   Draft,
   Project,
   ProviderError,
@@ -30,6 +31,8 @@ export interface UiState {
   authStage: "idle" | "waiting_browser" | "exchanging";
   authUrl: string | null;
   claude: ClaudeInfo | null;
+  context: ContextInfo | null;
+  contextBusy: boolean;
   tasks: Task[];
   selectedTaskId: number | null;
   detail: TaskDetail | null;
@@ -53,6 +56,8 @@ export const initialState: UiState = {
   authStage: "idle",
   authUrl: null,
   claude: null,
+  context: null,
+  contextBusy: false,
   tasks: [],
   selectedTaskId: null,
   detail: null,

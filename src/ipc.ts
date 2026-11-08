@@ -5,6 +5,7 @@ import type {
   AppEvent,
   ChatGptStatus,
   ClaudeInfo,
+  ContextInfo,
   Draft,
   Model,
   Policy,
@@ -35,6 +36,7 @@ export const api = {
   snapshot: () => invoke<Snapshot>("snapshot"),
   settingsSet: (key: string, value: string) => invoke<void>("settings_set", { key, value }),
   projectPick: () => invoke<Project | null>("project_pick"),
+  projectContext: (projectId: number, refresh: boolean) => invoke<ContextInfo>("project_context", { projectId, refresh }),
   projectSelect: (id: number) => invoke<void>("project_select", { id }),
   taskList: (projectId: number) => invoke<Task[]>("task_list", { projectId }),
   taskCreate: (projectId: number, title: string, description: string) =>

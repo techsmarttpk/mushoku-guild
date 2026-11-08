@@ -12,6 +12,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::chatgpt::{ChatGpt, ChatGptStatus, Model};
 use crate::claude::{self, ClaudeInfo, Policy, Runner, StartRequest};
 use crate::db::{Db, Draft, Project, Task, TaskDetail};
+use crate::project_context::{ContextCache, ContextInfo};
 use crate::events::{emit, AppEvent, ErrorKind, ProviderError};
 
 pub struct AppState {
@@ -19,6 +20,7 @@ pub struct AppState {
     pub chatgpt: Arc<ChatGpt>,
     pub runner: Arc<Runner>,
     pub data_dir: PathBuf,
+    pub contexts: Arc<ContextCache>,
     generation: AtomicU64,
     gen_cancel: Mutex<Option<(i64, Arc<AtomicBool>)>>,
 }
@@ -30,6 +32,7 @@ impl AppState {
             chatgpt: Arc::new(ChatGpt::default()),
             runner: Arc::new(Runner::default()),
             data_dir,
+            contexts: Arc::new(ContextCache::default()),
             generation: AtomicU64::new(0),
             gen_cancel: Mutex::new(None),
         }
@@ -74,7 +77,7 @@ pub fn settings_set(state: State<'_, AppState>, key: String, value: String) -> R
     match key.as_str() {
         "max_turns" if value.parse::<u32>().map(|n| (1..=200).contains(&n)) != Ok(true) => return Err(e(ErrorKind::Other, "max turns must be 1-200")),
         "policy" if Policy::parse(&value).is_none() => return Err(e(ErrorKind::Other, "unknown policy")),
-        "claude_model" if value.len() > 80 || value.contains(char::is_whitespace) => return Err(e(ErrorKind::Other, "invalid model name")),
+        "claude_model" if !claude::MODEL_CHOICES.contains(&value.as_str()) => return Err(e(ErrorKind::Other, "unknown Claude model choice")),
         _ => {}
     }
     state.db.set_setting(&key, &value).map_err(|m| e(ErrorKind::Other, m))
@@ -135,6 +138,16 @@ pub fn task_accept(app: AppHandle, state: State<'_, AppState>, id: i64) -> R<()>
     state.db.set_status(id, "accepted").map_err(|m| e(ErrorKind::Other, m))?;
     emit(&app, AppEvent::TaskStatus { task_id: id, status: "accepted".into() });
     Ok(())
+}
+
+/// Project context profile for the selected project (local, sanitized). `refresh` forces a rescan.
+#[tauri::command]
+pub async fn project_context(state: State<'_, AppState>, project_id: i64, refresh: bool) -> R<ContextInfo> {
+    let project = state.db.project(project_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown project"))?;
+    let cache = state.contexts.clone();
+    tauri::async_runtime::spawn_blocking(move || cache.get(project_id, std::path::Path::new(&project.path), refresh))
+        .await
+        .map_err(|x| e(ErrorKind::Other, x.to_string()))
 }
 
 // ---------------------------------------------------------------- Reasoner (ChatGPT)
@@ -202,10 +215,18 @@ pub fn reasoner_generate(app: AppHandle, state: State<'_, AppState>, task_id: i6
     }
     emit(&app, AppEvent::TaskStatus { task_id, status: "reasoning".into() });
 
-    let (db, gpt) = (state.db.clone(), state.chatgpt.clone());
+    let (db, gpt, contexts) = (state.db.clone(), state.chatgpt.clone(), state.contexts.clone());
     std::thread::spawn(move || {
-        let instructions = format!("{REASONER_INSTRUCTIONS}\n\nProject name: {}\nProject directory: {}", project.name, project.path);
-        let messages = db.messages(task_id);
+        // Rescan only when the project changed since the last scan; a failure never blocks the prompt.
+        let mut ctx = contexts.get(project.id, std::path::Path::new(&project.path), false);
+        if ctx.status == "stale" {
+            ctx = contexts.get(project.id, std::path::Path::new(&project.path), true);
+        }
+        let instructions = build_instructions(&project.name, &project.path, &ctx);
+        let mut messages = db.messages(task_id);
+        if let Some(first) = messages.first_mut() {
+            first.1 = format!("Quest title: {}\n\nQuest description:\n{}", task.title, first.1);
+        }
         let model = match db.setting("chatgpt_model").filter(|m| !m.is_empty()) {
             Some(m) => Ok(m),
             None => gpt.models().and_then(|ms| ms.into_iter().next().map(|m| m.slug).ok_or_else(|| e(ErrorKind::Eligibility, "ChatGPT offers no models to this account."))),
@@ -229,6 +250,24 @@ pub fn reasoner_generate(app: AppHandle, state: State<'_, AppState>, task_id: i6
         }
     });
     Ok(generation)
+}
+
+/// System prompt: fixed guidance + the sanitized project context (or an explicit note that it is unavailable).
+pub fn build_instructions(name: &str, path: &str, ctx: &ContextInfo) -> String {
+    let context = if ctx.status == "unavailable" || ctx.text.is_empty() {
+        format!(
+            "Project name: {name}\nProject directory: {path}\n\nPROJECT CONTEXT UNAVAILABLE ({}). Do not assume the project language, framework or layout; \
+             rely only on the quest text, say in the Assumptions section that the stack is unknown, and tell Claude to inspect the repository first.",
+            ctx.error.as_deref().unwrap_or("not collected")
+        )
+    } else {
+        format!(
+            "The following project profile was collected locally and sanitized by Mushoku Guild. It is all you know about the project. \
+             Write a prompt that fits THIS stack, these conventions and this directory layout, and do not suggest different frameworks or tools than the ones listed.\n\n<project_context>\n{}\n</project_context>",
+            ctx.text
+        )
+    };
+    format!("{REASONER_INSTRUCTIONS}\n\n{context}")
 }
 
 fn fail(app: &AppHandle, db: &Db, task_id: i64, generation: u64, err: ProviderError) {
@@ -312,7 +351,7 @@ pub fn run_start(app: AppHandle, state: State<'_, AppState>, task_id: i64, polic
     let draft = state.db.drafts(task_id).into_iter().rev().find(|d| d.approved).ok_or_else(|| e(ErrorKind::Other, "No approved prompt."))?;
     let exe = claude::locate(state.db.setting("claude_path").as_deref()).ok_or_else(|| e(ErrorKind::NotFound, "Claude Code (claude.exe) was not found. Open Setup and check Claude Code."))?;
     let max_turns = state.db.setting("max_turns").and_then(|v| v.parse().ok()).unwrap_or(40);
-    let model = state.db.setting("claude_model").unwrap_or_default();
+    let model = claude::resolve_model(state.db.setting("claude_model").as_deref()).unwrap_or("").to_string();
     let policy_name = match policy {
         Policy::ReadOnly => "read_only",
         Policy::AskEach => "ask_each",
@@ -356,4 +395,31 @@ pub fn permission_decide(state: State<'_, AppState>, request_id: String, allow: 
 
 pub fn data_dir(app: &AppHandle) -> PathBuf {
     app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("mushoku-guild"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(status: &str, text: &str) -> ContextInfo {
+        ContextInfo { status: status.into(), text: text.into(), collected_at: 0, sources: vec![], truncated: false, error: Some("boom".into()) }
+    }
+
+    #[test]
+    fn instructions_embed_context_or_state_it_is_unavailable() {
+        let with = build_instructions("p", "C:\\p", &info("ready", "React + Spring Boot"));
+        assert!(with.contains("<project_context>") && with.contains("React + Spring Boot"));
+        let without = build_instructions("p", "C:\\p", &info("unavailable", ""));
+        assert!(without.contains("PROJECT CONTEXT UNAVAILABLE") && !without.contains("<project_context>"));
+    }
+
+    #[test]
+    fn selected_model_persists_in_the_database() {
+        let db = Db::open_in_memory();
+        assert_eq!(claude::resolve_model(db.setting("claude_model").as_deref()), Some("sonnet"));
+        db.set_setting("claude_model", "haiku").unwrap();
+        assert_eq!(claude::resolve_model(db.setting("claude_model").as_deref()), Some("haiku"));
+        db.set_setting("claude_model", "default").unwrap();
+        assert_eq!(claude::resolve_model(db.setting("claude_model").as_deref()), None);
+    }
 }

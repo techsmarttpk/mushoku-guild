@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { CafeScene, SCENE_H, SCENE_W } from "./cafe/CafeScene.ts";
+import { createWelcomeGate, pickWelcome } from "./domain/welcome.ts";
 import { projectScene } from "./domain/scene.ts";
 import { initialState, reduce } from "./domain/store.ts";
-import type { Model, Policy, Project, ProviderError, Task } from "./domain/types.ts";
+import { MODEL_LABEL, modelChoice, type Model, type Policy, type Project, type ProviderError, type Task } from "./domain/types.ts";
 import { api, onAppEvent, onWindowMinimized, toProviderError } from "./ipc.ts";
 import { ActivityFeed, ErrorNote, GuildPanel, HistoryList, NewTask, PermissionDialog, TaskView } from "./ui/panels.tsx";
+
+/** One greeting per application launch; React re-renders and effect re-runs cannot repeat it. */
+const welcomeGate = createWelcomeGate();
 
 type Tab = "quest" | "guild" | "log";
 
@@ -77,6 +81,26 @@ export function App() {
     };
   }, [fail, loadTasks]);
 
+  // ---- project context: collected when the project changes, never per keystroke
+  const loadContext = useCallback(async (projectId: number | null, refresh: boolean) => {
+    if (projectId === null) {
+      dispatch({ type: "patch", patch: { context: null, contextBusy: false } });
+      return;
+    }
+    dispatch({ type: "patch", patch: { contextBusy: true } });
+    try {
+      dispatch({ type: "patch", patch: { context: await api.projectContext(projectId, refresh), contextBusy: false } });
+    } catch (e) {
+      dispatch({
+        type: "patch",
+        patch: { contextBusy: false, context: { status: "unavailable", text: "", collectedAt: Date.now(), sources: [], truncated: false, error: toProviderError(e).message } },
+      });
+    }
+  }, []);
+  useEffect(() => {
+    void loadContext(state.currentProjectId, false);
+  }, [state.currentProjectId, loadContext]);
+
   // ---- café scene: created once, driven only by projected real state
   useEffect(() => {
     const host = hostRef.current;
@@ -91,6 +115,7 @@ export function App() {
       await scene.init(host);
       if (cancelled) return;
       sync();
+      if (welcomeGate()) scene.welcome(pickWelcome(Math.random));
       unlisten = await onWindowMinimized((m) => {
         minimized.current = m;
         sync();
@@ -249,6 +274,7 @@ export function App() {
         <div className="chips">
           <span className={`chip ${state.chatgpt.connected ? "ok" : ""}`}>ChatGPT {state.chatgpt.connected ? "●" : "○"}</span>
           <span className={`chip ${claudeReady ? "ok" : ""}`}>Claude {claudeReady ? "●" : "○"}</span>
+          <span className="chip" title="Claude Code model used for every quest">Model: {MODEL_LABEL[modelChoice(state.settings["claude_model"])]}</span>
           <span className="chip">{project ? project.name : "no project"}</span>
         </div>
       </header>
@@ -317,6 +343,7 @@ export function App() {
                   if (await api.claudePickExe()) dispatch({ type: "patch", patch: { claude: await api.claudeDetect() } });
                 })
               }
+              onRefreshContext={() => void loadContext(state.currentProjectId, true)}
               onPickProject={() => void pickProject()}
               onSelectProject={(p) => void selectProject(p)}
             />
@@ -326,7 +353,7 @@ export function App() {
             <div className="stack">
               {!state.detail ? (
                 <>
-                  <NewTask project={project} connected={state.chatgpt.connected} onSubmit={(t, d) => void submitTask(t, d)} busy={busy === "task"} />
+                  <NewTask project={project} context={state.context} contextBusy={state.contextBusy} connected={state.chatgpt.connected} onSubmit={(t, d) => void submitTask(t, d)} busy={busy === "task"} />
                   <ErrorNote error={state.error} onDismiss={() => dispatch({ type: "patch", patch: { error: null } })} />
                 </>
               ) : (

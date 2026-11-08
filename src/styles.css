@@ -555,3 +555,8 @@ details > summary {
     transform: none;
   }
 }
+
+.ctx-badge {
+  font-size: 18px;
+  color: var(--cream-d);
+}

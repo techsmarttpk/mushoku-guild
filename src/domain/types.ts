@@ -125,3 +125,24 @@ export type AppEvent =
   | { type: "run_permission_resolved"; requestId: string; decision: string }
   | { type: "run_finished"; taskId: number; status: string; result: string | null; note: string | null }
   | { type: "claude_rate"; fiveHour: number | null; sevenDay: number | null; status: string | null };
+
+export interface ContextInfo {
+  status: "ready" | "stale" | "unavailable";
+  text: string;
+  collectedAt: number;
+  sources: string[];
+  truncated: boolean;
+  error: string | null;
+}
+
+export type ClaudeModelChoice = "sonnet" | "opus" | "haiku" | "default";
+export const MODEL_LABEL: Record<ClaudeModelChoice, string> = {
+  sonnet: "Sonnet",
+  opus: "Opus",
+  haiku: "Haiku",
+  default: "CLI default",
+};
+/** Unset or unknown settings mean Sonnet (the Rust side resolves it the same way). */
+export function modelChoice(setting: string | undefined): ClaudeModelChoice {
+  return setting === "opus" || setting === "haiku" || setting === "default" || setting === "sonnet" ? setting : "sonnet";
+}

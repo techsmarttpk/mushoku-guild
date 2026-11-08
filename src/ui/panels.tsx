@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { MODEL_LABEL, modelChoice, type ClaudeModelChoice } from "../domain/types.ts";
 import type {
   Activity,
+  ContextInfo,
   ChatGptStatus,
   ClaudeInfo,
   Model,
@@ -49,6 +51,43 @@ const STATUS_LABEL: Record<string, string> = {
 };
 export const statusLabel = (s: string): string => STATUS_LABEL[s] ?? s;
 
+// ---------------------------------------------------------------- project context indicator
+
+export function ContextBadge({ context, busy }: { context: ContextInfo | null; busy: boolean }) {
+  const [label, cls] = busy
+    ? ["Project context: scanning…", ""]
+    : context === null
+      ? ["Project context: not collected", ""]
+      : context.status === "ready"
+        ? ["Project context: ready", "ok-line"]
+        : context.status === "stale"
+          ? ["Project context: needs refresh", "warn-line"]
+          : ["Project context: unavailable (ChatGPT will use only your description)", "warn-line"];
+  return <span className={`ctx-badge ${cls}`}>● {label}</span>;
+}
+
+function ContextCard(props: { context: ContextInfo | null; busy: boolean; onRefresh: () => void }) {
+  const c = props.context;
+  return (
+    <div className="stack">
+      <div className="row">
+        <ContextBadge context={c} busy={props.busy} />
+        <button className="btn btn-quiet" onClick={props.onRefresh} disabled={props.busy}>
+          Refresh context
+        </button>
+      </div>
+      {c?.error && <div className="note">{c.error}</div>}
+      {c && c.text && (
+        <details>
+          <summary>Inspect what ChatGPT will receive ({c.text.length.toLocaleString()} characters{c.truncated ? ", shortened" : ""})</summary>
+          <p className="muted small">Collected locally from: {c.sources.join(", ") || "nothing"}. Secrets, .env files, keys, build output and dependencies are excluded; secret-looking values are redacted. ChatGPT sees only this text, never your files.</p>
+          <pre className="code">{c.text}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- Guild (setup)
 
 export function GuildPanel(props: {
@@ -64,6 +103,7 @@ export function GuildPanel(props: {
   onPickClaude: () => void;
   onPickProject: () => void;
   onSelectProject: (p: Project) => void;
+  onRefreshContext: () => void;
   authError: ProviderError | null;
 }) {
   const { state } = props;
@@ -88,6 +128,7 @@ export function GuildPanel(props: {
             Choose folder…
           </button>
         </div>
+        {state.currentProjectId !== null && <ContextCard context={state.context} busy={state.contextBusy} onRefresh={props.onRefreshContext} />}
         <ul className="list">
           {state.projects.map((p) => (
             <li key={p.id}>
@@ -235,14 +276,18 @@ function ClaudeCard(props: {
           Choose claude.exe…
         </button>
       </div>
+      <div className="muted small">Using: <strong>{MODEL_LABEL[modelChoice(props.model)]}</strong> for every quest. If your account cannot use a model, Claude Code reports it in the result; pick another here.</div>
       <div className="row two">
         <label className="field">
-          Model (optional)
-          <input
-            defaultValue={props.model}
-            placeholder="CLI default"
-            onBlur={(e) => e.target.value !== props.model && props.onSetting("claude_model", e.target.value.trim())}
-          />
+          Claude model
+          <select value={modelChoice(props.model)} onChange={(e) => props.onSetting("claude_model", e.target.value)}>
+            {(Object.keys(MODEL_LABEL) as ClaudeModelChoice[]).map((m) => (
+              <option key={m} value={m}>
+                {MODEL_LABEL[m]}
+                {m === "sonnet" ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="field">
           Max turns
@@ -267,7 +312,7 @@ const POLICY_TEXT: Record<Policy, { name: string; text: string }> = {
   accept_edits: { name: "Allow edits, ask for commands", text: "File edits inside the project are allowed automatically; shell commands still wait for your Allow." },
 };
 
-export function NewTask(props: { project: Project | null; connected: boolean; onSubmit: (title: string, description: string) => void; busy: boolean }) {
+export function NewTask(props: { project: Project | null; context: ContextInfo | null; contextBusy: boolean; connected: boolean; onSubmit: (title: string, description: string) => void; busy: boolean }) {
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
   if (!props.project) return <div className="note">Choose a project folder in the Guild tab first.</div>;
@@ -282,6 +327,7 @@ export function NewTask(props: { project: Project | null; connected: boolean; on
       }}
     >
       <h3>New quest for {props.project.name}</h3>
+      <ContextBadge context={props.context} busy={props.contextBusy} />
       <label className="field">
         Title (optional)
         <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} />
@@ -330,6 +376,7 @@ export function TaskView(props: {
         <h3>{task.title}</h3>
         <span className={`pill s-${task.status}`}>{statusLabel(task.status)}</span>
       </div>
+      <ContextBadge context={state.context} busy={state.contextBusy} />
       <details open={task.status === "draft"}>
         <summary>Your request</summary>
         <p className="pre">{task.description}</p>

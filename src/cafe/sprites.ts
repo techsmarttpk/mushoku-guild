@@ -1,7 +1,8 @@
 // Original character, speech-bubble and quest-ticket sprites, generated from code (no external art).
 // Characters are 16x26 px. The Reasoner is a scholar-mage (purple robe, round glasses); the Executor is an
 // engineer-knight (teal tunic, steel pauldrons, goggles). Frames are chosen by poses from domain/scene.ts.
-import { C, newPen, type Pen } from "./pixel.ts";
+import { C, drawText, newPen, type Pen } from "./pixel.ts";
+import { BUBBLE_CHARS, BUBBLE_LINES, wrapText } from "../domain/welcome.ts";
 import type { BoardState, BubbleKind, ExecutorPose, ReasonerPose } from "../domain/scene.ts";
 
 export type Who = "reasoner" | "executor";
@@ -494,4 +495,32 @@ export function buildTicket(state: BoardState): FrameSet {
     out.push(p);
   }
   return out;
+}
+
+// ---------------------------------------------------------------- dialogue bubble (2x pixel font)
+
+/** A speech bubble with the text wrapped to the bubble grid; the tail points down at the speaker. */
+export function buildSpeech(text: string): Pen {
+  const lines = wrapText(text, BUBBLE_CHARS).slice(0, BUBBLE_LINES);
+  const scale = 2;
+  const textW = Math.max(...lines.map((l) => l.length)) * 4 * scale - scale;
+  const w = textW + 10;
+  const h = lines.length * 6 * scale + 8;
+  const p = newPen(w, h + 6);
+  p.r(2, 0, w - 4, h, C.ink);
+  p.r(0, 2, w, h - 4, C.ink);
+  p.r(2, 1, w - 4, h - 2, C.cream);
+  p.r(1, 2, w - 2, h - 4, C.cream);
+  p.r(3, 2, w - 6, 1, C.white);
+  const tx = (w >> 1) - 3;
+  p.r(tx, h - 1, 7, 1, C.cream);
+  p.r(tx, h, 7, 1, C.ink);
+  p.r(tx + 1, h - 1, 5, 3, C.cream);
+  p.r(tx + 1, h + 2, 3, 1, C.cream);
+  p.r(tx, h, 1, 3, C.ink);
+  p.r(tx + 5, h, 1, 3, C.ink);
+  p.r(tx + 1, h + 3, 3, 1, C.ink);
+  p.r(tx + 1, h - 1, 5, 1, C.cream);
+  lines.forEach((l, i) => drawText(p, 5, 4 + i * 6 * scale, l, C.ink2, scale));
+  return p;
 }

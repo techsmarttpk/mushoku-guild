@@ -12,8 +12,9 @@ import "pixi.js/unsafe-eval"; // CSP-safe shader/uniform sync (no `new Function`
 import { Application, Sprite, Texture, Ticker } from "pixi.js";
 import type { BoardState, BubbleKind, SceneState, Spot } from "../domain/scene.ts";
 import { IDLE_SCENE } from "../domain/scene.ts";
+import type { WelcomeStep } from "../domain/welcome.ts";
 import { BOARD_SLOT, FLAMES, H, MONITOR, SPOTS, STEAM, W, buildBackground, buildFlame, buildForeground, buildMonitorFrame, buildSteam } from "./world.ts";
-import { CHAR_H, CHAR_W, buildBubble, buildCharacter, buildTicket, type CharacterSprites, type FrameSet, type Who } from "./sprites.ts";
+import { CHAR_H, CHAR_W, buildBubble, buildSpeech, buildCharacter, buildTicket, type CharacterSprites, type FrameSet, type Who } from "./sprites.ts";
 import type { Pen } from "./pixel.ts";
 
 export const SCENE_W = W;
@@ -86,6 +87,9 @@ export class CafeScene {
   private steamSprite: Sprite | null = null;
   private steamTex: Texture[] = [];
   private monitor: Sprite | null = null;
+  private speechSprite: Sprite | null = null;
+  private speech: { who: Who; tex: Texture } | null = null;
+  private speechTimers: ReturnType<typeof setTimeout>[] = [];
   private monitorTex: Texture[] = [];
 
   async init(host: HTMLElement): Promise<void> {
@@ -179,12 +183,16 @@ export class CafeScene {
       a.bubble.visible = false;
       stage.addChild(a.bubble);
     }
+    this.speechSprite = new Sprite();
+    this.speechSprite.visible = false;
+    stage.addChild(this.speechSprite);
   }
 
   /** Called whenever the projected real state changes. */
   setState(s: SceneState): void {
     this.state = s;
     if (!this.actors) return;
+    if (s !== IDLE_SCENE && s.board !== "empty") this.stopSpeech(); // real work always wins over small talk
     for (const who of ["reasoner", "executor"] as const) {
       const a = this.actors[who];
       const want = s[who];
@@ -211,6 +219,44 @@ export class CafeScene {
     a.route = route;
     a.spot = spot;
     a.bubbleKind = "none";
+  }
+
+  /**
+   * Plays welcome dialogue one speech bubble at a time. It is ambient only: it never changes poses, is dropped as
+   * soon as a real task shows up on the board, and does nothing while the window is paused.
+   */
+  welcome(steps: WelcomeStep[]): void {
+    this.stopSpeech();
+    let at = 600;
+    for (const st of steps) {
+      const tex = Texture.from(buildSpeech(st.text).canvas);
+      tex.source.scaleMode = "nearest";
+      this.speechTimers.push(
+        setTimeout(() => {
+          if (this.destroyed) return;
+          this.speech = { who: st.who, tex };
+          if (!this.paused) this.paint();
+        }, at),
+      );
+      at += st.ms;
+      this.speechTimers.push(
+        setTimeout(() => {
+          if (this.destroyed) return;
+          if (this.speech?.tex === tex) this.speech = null;
+          if (!this.paused) this.paint();
+        }, at),
+      );
+      at += 350;
+    }
+  }
+
+  private stopSpeech(): void {
+    this.speechTimers.forEach(clearTimeout);
+    this.speechTimers = [];
+    if (this.speech) {
+      this.speech = null;
+      if (this.initialised && !this.destroyed) this.paint();
+    }
   }
 
   setPaused(paused: boolean): void {
@@ -305,6 +351,18 @@ export class CafeScene {
         a.bubble.position.set(Math.round(a.pos.x + 3), Math.round(a.pos.y - CHAR_H - 10 + jump));
       }
     }
+    if (this.speechSprite) {
+      const sp = this.speech;
+      const a = sp ? this.actors[sp.who] : null;
+      const show = !!sp && !!a && a.route.length === 0 && a.spot === "lounge" && a.bubbleKind === "none";
+      this.speechSprite.visible = show;
+      if (show && sp && a) {
+        this.speechSprite.texture = sp.tex;
+        const w = sp.tex.width;
+        const x = Math.min(SCENE_W - w - 2, Math.max(2, a.pos.x - (w >> 1)));
+        this.speechSprite.position.set(Math.round(x), Math.round(a.pos.y - CHAR_H - sp.tex.height - 1));
+      }
+    }
     if (this.ticket) {
       const set = this.ticketTex.get(this.board);
       if (set) this.ticket.texture = set[t % set.length] as Texture;
@@ -328,7 +386,7 @@ export class CafeScene {
 
   private frameKey(): string {
     if (!this.actors) return "";
-    const parts: Array<string | number> = [this.board, this.ticket?.texture.uid ?? 0, this.steamSprite?.texture.uid ?? 0, this.flameSprites[0]?.texture.uid ?? 0, this.monitor?.texture.uid ?? 0];
+    const parts: Array<string | number> = [this.board, this.ticket?.texture.uid ?? 0, this.steamSprite?.texture.uid ?? 0, this.flameSprites[0]?.texture.uid ?? 0, this.monitor?.texture.uid ?? 0, this.speechSprite?.visible ? this.speechSprite.texture.uid : 0, this.speechSprite?.x ?? 0];
     for (const a of Object.values(this.actors)) parts.push(a.sprite.texture.uid, a.sprite.x, a.sprite.y, a.sprite.scale.x, a.bubble.visible ? a.bubble.texture.uid : 0, a.bubble.y);
     return parts.join("|");
   }
@@ -355,6 +413,7 @@ export class CafeScene {
   destroy(): void {
     this.destroyed = true;
     this.clearTimer();
+    this.speechTimers.forEach(clearTimeout);
     if (this.initialised) {
       this.app.ticker.stop();
       Ticker.system.stop();
