@@ -81,6 +81,7 @@ Nothing below is accepted. Each needs the user's agreement and, where noted, evi
 - **Alternatives considered:** An OpenAI API key (separately billed, contradicts the user's goal); another provider such as DeepSeek through an API key; upgrading to Plus.
 - **Consequences if accepted:** Mushoku Guild must be open-source and local, follow OpenAI's UI/UX rules, and handle OAuth tokens and usage limits. If the Go test fails, a fallback decision is required.
 - **Accept when:** The Go test passes, or the user chooses to proceed regardless.
+- **Evidence update (2026-11-08, `docs/context.md` §12):** A spike authorized, listed models and streamed an inference successfully with the user's account, so the gating test has passed in practice. Caveats: the plan type is not visible in the tokens (Go is the user's statement), OpenAI's docs still name only Plus and Pro, and refresh/usage-limit behaviour and the terms review are outstanding. **Status remains `proposed`; it has not been accepted.** It needs the user's explicit decision.
 
 ### ADR-0008 (proposed): Implement the documented protocol ourselves instead of depending on the DevKit
 - **Date proposed:** 2026-11-08
@@ -88,6 +89,7 @@ Nothing below is accepted. Each needs the user's agreement and, where noted, evi
 - **Proposed decision:** Implement the small documented OAuth/PKCE + Responses SSE client behind our own adapter, using the DevKit only as a reference, subject to a licence/terms review.
 - **Alternatives considered:** Depending on or vendoring `@siwc/local` (licence and stack coupling); the Codex app-server route (adds a heavy dependency).
 - **Accept when:** The licence/terms review concludes this is acceptable.
+- **Evidence update (2026-11-08, `docs/context.md` §12):** The spike implemented the documented flow from the public docs alone (no DevKit code used or read) in about 200 lines with Node built-ins, which shows technical feasibility. The licence/terms question is unresolved. **Status remains `proposed`.**
 
 ### ADR-0009 (proposed): Provider abstraction with separate auth, role and capability interfaces
 - **Date proposed:** 2026-11-08

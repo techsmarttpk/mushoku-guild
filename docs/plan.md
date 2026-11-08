@@ -60,12 +60,20 @@
   - [x] Research Anthropic policy on subscription use by third-party apps → §11.3
   - [x] Verify locally that `claude -p --output-format stream-json` runs under the existing subscription login and emits the documented event types (trivial prompt; exit 0)
   - [x] Propose provider abstraction (ADR-0009, proposed) and record accepted ADR-0006
-  - [ ] **Run a ChatGPT authorization test with the user's Go account** (throwaway spike: registration, token exchange, scope check, `/v1/models`, one streamed response); record success or the exact error. Until done, Go eligibility stays **unconfirmed**
-  - [ ] Ask OpenAI (or fetch the help-center article that returned 403) to confirm Go eligibility for open-source plan usage
+  - [x] **Run a ChatGPT authorization test with the user's account** (throwaway spike `spikes/chatgpt-siwc/`): registration, auth, token exchange, ID-token validation, scope check, `/v1/models` (3 listed models) and one streamed response all succeeded on 2026-11-08 (`docs/context.md` §12). Caveat: plan type is not visible in tokens; Go is the user's statement
+  - [ ] User confirms in ChatGPT Settings that the tested account's plan is Go
+  - [ ] Ask OpenAI (or fetch the help-center article that returned 403) to confirm Go eligibility for open-source plan usage (docs still name only Plus/Pro)
+  - [ ] Disconnect the spike's "Mushoku Guild" grant in ChatGPT Settings (the spike did not revoke its refresh token)
+  - [ ] Extend the spike or a second spike to test: refresh-token rotation, revocation, reauthorization with `id_token_hint`, `instructions`, multi-turn input, mid-stream failure and usage-limit errors, response headers for quota information
+  - [ ] Decide what happens to `spikes/chatgpt-siwc/` (committed 2026-11-08 as disposable research evidence with READMEs saying so; delete `spikes/` when Phase 1 concludes or when the real implementation replaces it; never import it into application code)
   - [ ] Review the DevKit licence and OpenAI terms for an open-source app that implements the flow itself; choose the project licence
   - [ ] Put the CLI-spawning pattern to Anthropic (contact link on the legal page) and record the answer
-  - [ ] Spike Claude Code on a real edit task: real `tool_use`/`tool_result` events, `--permission-prompt-tool` contract, `permission_denied` handling, cancellation and process cleanup on Windows, numeric exit codes
-  - [ ] Measure the per-run overhead of the user's global Claude config (about 110k cache tokens observed) and decide how to mitigate it
+  - [x] Spike Claude Code on a real edit task (`spikes/claude-cli/`, 2026-11-08): discovery, version/signature/auth checks, launch with scrubbed env, real `tool_use`/`tool_result`/`permission_denied` events, `--permission-prompt-tool` contract, process-tree cancellation and graceful interrupt on Windows, exit codes observed, login retained across 8 runs (`docs/context.md` §13). Not covered: Rust launcher, Ctrl+C console events, Job Objects, error paths (expired login, usage limit, max turns/budget), machines without Git, long-lived multi-turn process
+  - [x] Measure the per-run overhead of the user's global Claude config: ~110k cache tokens/$0.44 with full config vs ~13.6k tokens/$0.0009 with `--strict-mcp-config`, slash commands and user settings disabled; ~200–285 MB RAM per run tree (`docs/context.md` §13.8). Mitigation direction only; not a decision
+  - [ ] Test Claude Code error paths without touching the login: usage-limit and max-turns/budget results, `--permission-prompts none`, approver timeout/crash behaviour, `api_retry` events
+  - [ ] Measure idle cost and behaviour of a long-lived stream-json Claude process vs one process per task; decide process model
+  - [ ] Verify Claude Code on a Windows machine without Git for Windows (Bash tool / PowerShell fallback) and with paths containing spaces
+  - [ ] Decide whether the app honours the user's global Claude settings, plugins and hooks or runs with `--setting-sources project,local`; always use `--strict-mcp-config` (candidate requirement)
   - [ ] Clarify with the user: MVP scope, target platforms, approval model, persistence needs, fallback if Go is ineligible
   - [ ] Evaluate candidate UI/runtime/rendering stacks against constraints; measure idle CPU/RAM for a hello-world of each shortlisted option
   - [ ] Decide stack → ADR (needs user agreement)
@@ -171,3 +179,5 @@
 - 2026-11-08 — Plan created during repository initialisation. Phase 0 completed and verified on remote.
 - 2026-11-08 — Documentation moved from repository root to `docs/` (ADR-0005); `CLAUDE.md` remains in root. Phase 0 status unchanged (completed). Task names above refer to the files by their original creation.
 - 2026-11-08 — Phase 1 started. Integration research completed and documented; Phase 1 tasks refined (added Go authorization test, licence review, Anthropic policy query, Claude Code spike, overhead measurement). No tasks removed.
+- 2026-11-08 — ChatGPT authorization spike run and documented (`docs/context.md` §12). Go-test task ticked with caveats; new follow-up tasks added (plan confirmation, grant cleanup, extended tests, spike disposal). ADR-0007/0008 remain proposed. No tasks removed.
+- 2026-11-08 — Native Windows Claude Code CLI spike run and documented (`docs/context.md` §13). Two Phase 1 tasks ticked with caveats; four follow-up tasks added. No tasks removed. No ADRs changed (ADR-0006 stands; nothing new accepted).

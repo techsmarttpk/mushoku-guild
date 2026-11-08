@@ -25,7 +25,7 @@ Confirmed (F-C) and proposed (F-P):
 | ID | Requirement | Basis |
 |----|-------------|-------|
 | F-C1 | User can describe a development task. | Confirmed (workflow step 1) |
-| F-C2 | System obtains an engineered implementation prompt from a prompt-engineering agent. | Confirmed (step 2); intended route is ChatGPT via Sign in with ChatGPT (proposed ADR-0007, Go eligibility unconfirmed) |
+| F-C2 | System obtains an engineered implementation prompt from a prompt-engineering agent. | Confirmed (step 2); intended route is ChatGPT via Sign in with ChatGPT (proposed ADR-0007; works in a spike, Go eligibility not confirmed by OpenAI) |
 | F-C3 | System hands the prompt to Claude Code without manual copy/paste. | Confirmed (steps 3–4) |
 | F-C4 | Claude Code executes the task for real. | Confirmed (step 5, "real integrations") |
 | F-C5 | User can see what each agent is doing and task status/progress. | Confirmed |
@@ -171,7 +171,7 @@ ProviderError { kind: not_signed_in | not_eligible | usage_limit | transient
 Adapter notes (from `docs/context.md` §11; behaviour marked unverified has not been tested):
 
 - **ChatGPT Reasoner:** sends `store:false, stream:true`; maps `instructions`; omits unsupported fields; success only on `response.completed`; maps `subscription_sharing_usage_limit_exceeded` → `usage_limit`, `_user_not_eligible` → `not_eligible`, `_unsupported_capability` → `unsupported`, refresh failures → `not_signed_in`, 503s → `transient`. Model list is discovered at run time, never hard-coded.
-- **Claude Code Executor:** spawns `claude -p --output-format stream-json --verbose` in the project directory with the prompt on stdin; maps result `subtype` and `is_error` to `Finished`/`Failed` (not the exit code alone); surfaces `permission_denied` events and `permission_denials`; maps `rate_limit_event` and `api_retry` auth/rate categories to `usage_limit` / `not_signed_in`. Interactive per-tool approval depends on the unverified `--permission-prompt-tool` contract; until verified, runs use a pre-approved allowed-tools list shown to the user at approval time.
+- **Claude Code Executor:** spawns `claude -p --output-format stream-json --verbose` in the project directory with the prompt on stdin; maps result `subtype` and `is_error` to `Finished`/`Failed` (not the exit code alone); surfaces `permission_denied` events and `permission_denials`; maps `rate_limit_event` and `api_retry` auth/rate categories to `usage_limit` / `not_signed_in`. Per-action approval uses `--permission-prompt-tool` with a small approver MCP server; its contract and the graceful interrupt message were observed in a spike on CLI 2.1.319 (not officially documented). Full detail: §2.15 and `docs/context.md` §13.
 - **Future providers** implement `Reasoner` and/or `Executor` plus an `AuthProvider`; OpenAI-compatible chat APIs with an API key are expected to be the cheapest to add. Not investigated.
 
 ## 2.3 Data models
@@ -257,7 +257,7 @@ Unit tests for the state machine and approval gate; contract tests for adapters 
 5. Refresh shortly before the one-hour access-token expiry, serialised by a single in-process lock; replace access token, expiry, scopes and the rotating refresh token together. On a terminal refresh error, clear tokens and prompt the user to sign in again with the saved client ID. Do not clear credentials on transient network failures.
 6. Sign-out: revoke the refresh token at the discovered revocation endpoint (retry with backoff; tell the user if revocation was not confirmed), then clear local tokens.
 
-All of this is documented by OpenAI but **untested** here; Go eligibility is unconfirmed (`docs/context.md` §11.1).
+Steps 1–3 (registration, authorization, exchange, ID-token and scope checks) and a streamed inference were exercised in a spike (`docs/context.md` §12). Steps 4–6 (persistence, refresh, revocation) remain **untested**. Go eligibility is observed, not confirmed by OpenAI.
 
 **Claude Code (CLI-owned):** the app never handles credentials. It runs `claude auth status` (exit 0 if logged in, 1 if not) to show state, warns if `ANTHROPIC_API_KEY` is set (the CLI would then bill that key instead of the subscription), and tells the user to run `claude auth login` themselves when signed out.
 
@@ -268,3 +268,33 @@ All of this is documented by OpenAI but **untested** here; Go eligibility is unc
 - Surface "Using ChatGPT plan" and a "Manage usage" link to `https://chatgpt.com/settings/usage` as required by OpenAI's UI guidelines.
 - On `usage_limit` from any provider: pause new work for that provider, keep the task resumable, show the provider's own message; do not infer a reset time from the error alone and do not silently switch provider or billing path.
 - Claude Code's `rate_limit_event` data (five-hour and seven-day utilisation) can feed a status display; the field set is observed (`docs/context.md` §11.2) but not documented, so treat it as best-effort.
+
+## 2.15 Claude Code executor adapter details (proposed; behaviour observed in a spike, `docs/context.md` §13)
+
+**Startup checks (before enabling the Executor):** executable found and version parses; version >= a pinned minimum (TBD, tested: 2.1.319); Authenticode status `Valid` with signer Anthropic, PBC (warn, do not hard-fail, if it differs); `claude auth status` reports `loggedIn`; warn if `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` is present (it would override the subscription); show the login expiry date.
+
+**Run lifecycle:** `Idle → Starting (spawn) → Running (init received) → [WaitingForApproval] → Finished | Failed | Cancelled`. One child process per `Run` (per-project long-lived process: undecided). On app exit, cancel all runs (process tree) so nothing is orphaned.
+
+**Event mapping (observed schema; EXPERIMENTAL and version-specific, parse defensively):**
+
+| CLI event | `RunEvent` |
+|-----------|-----------|
+| `system/init` | `Started {sessionId, model, tools, permissionMode}` |
+| `assistant` text / `stream_event` text deltas | `Output {text}` |
+| `assistant` `tool_use` | `ToolActivity {name, input summary, toolUseId}` |
+| `user` `tool_result` | `ToolActivity` completion (ok/error) |
+| `system/permission_denied` | `ToolDenied {tool, reason}` (not a failure) |
+| approver `tools/call` | `ApprovalRequest {approvalId, tool, input, toolUseId}` |
+| `rate_limit_event` | usage status update |
+| `result` | `Finished {outcome}` or `Failed` per rules below |
+| unknown event | logged and ignored |
+
+**Outcome rules:** `result.subtype == success && !is_error` → Finished (even if `permission_denials` is non-empty; surface them to the user); `is_error` or `subtype != success` → Failed or Cancelled depending on `terminal_reason` and whether the user requested cancel; no `result` before the process ended → Failed("aborted/crashed"). Exit code is recorded for diagnostics only.
+
+**Approval bridge (EXPERIMENTAL, CLI 2.1.319-specific; not in the official docs):** the approver MCP server receives `{tool_name, input, tool_use_id}` and must answer with a text content block holding JSON `{"behavior":"allow","updatedInput":…}` or `{"behavior":"deny","message":…}`. It relays to the app and blocks until the user decides; policy for timeout (default deny after N seconds) and for app/approver crashes (deny) is proposed, untested.
+
+**Cancel (graceful interrupt is EXPERIMENTAL and CLI 2.1.319-specific; the `taskkill` fallback is plain Windows behaviour):** write `{"type":"control_request","request_id":…,"request":{"subtype":"interrupt"}}` to stdin (requires `--input-format stream-json`, so the prompt is also sent as a stream-json user message), wait for `result`, close stdin, wait up to a short grace period, then `taskkill /PID <pid> /T /F`. Never rely on `child.kill()` alone on Windows.
+
+**Parsing:** line-buffered NDJSON, tolerate partial chunks and unknown fields, bound stored events per run, redact nothing automatically (assistant output and tool inputs can contain secrets from the user's project; treat them as sensitive in logs).
+
+**Windows notes:** `windowsHide`, `shell:false`, scrubbed environment, never `System32\bash.exe`, Job Object fallback (untested).

@@ -38,7 +38,7 @@ Core idea: **a small, headless orchestration core** (tasks, handoffs, approvals,
 | Rendering approach for café | TBD (constraint: no heavy game engine unless justified) |
 | Persistence | TBD |
 | Agent integration — Claude Code | Accepted (ADR-0006): unmodified `claude` CLI as child process, headless stream-json (ADR-0006). Agent SDK not used with subscription auth. |
-| Agent integration — prompt engineering agent | Proposed (ADR-0007): ChatGPT via Sign in with ChatGPT plan usage; self-implemented client (ADR-0008). Go eligibility unconfirmed. |
+| Agent integration — prompt engineering agent | Proposed (ADR-0007): ChatGPT via Sign in with ChatGPT plan usage; self-implemented client (ADR-0008). Spike succeeded for the user's account (`docs/context.md` §12); Go eligibility not confirmed by OpenAI. |
 | Provider abstraction | Proposed (ADR-0009), see §6a |
 | Packaging / installer | TBD |
 | Test framework | TBD |
@@ -72,8 +72,8 @@ Status of each (facts and sources in `docs/context.md` §11):
 
 | Integration | Purpose | Route | Status |
 |-------------|---------|-------|--------|
-| ChatGPT (prompt engineering) | Turn a task description into an implementation prompt | Sign in with ChatGPT "plan usage": OAuth+PKCE to `auth.openai.com`, then streaming Responses API at `api.openai.com/v1` | Documented by OpenAI; **not tested**; **Go eligibility unconfirmed**; DevKit licence is noncommercial |
-| Claude Code (execution) | Execute the development task | Spawn the user's unmodified `claude -p --output-format stream-json` under their own login (ADR-0006) | Trivial call **verified locally**; approval channel, cancellation and tool events **not yet tested** |
+| ChatGPT (prompt engineering) | Turn a task description into an implementation prompt | Sign in with ChatGPT "plan usage": OAuth+PKCE to `auth.openai.com`, then streaming Responses API at `api.openai.com/v1` | Documented by OpenAI; flow **verified in a spike** (auth, models, streamed inference; refresh/limits untested); **Go eligibility observed, not confirmed by OpenAI**; DevKit licence is noncommercial |
+| Claude Code (execution) | Execute the development task | Spawn the user's unmodified `claude -p --output-format stream-json` under their own login (ADR-0006) | **Verified in a spike** (`docs/context.md` §13): discovery, launch, stream-json events, permission denial and approval via an MCP approver, cancellation, login retention. Uses behaviour not covered by official docs (observed on CLI 2.1.319); policy question open |
 | Local filesystem / Git | Project working directory, diffs for review | Via Claude Code and/or direct | Not investigated |
 | Future providers (e.g. DeepSeek) | Additional Reasoners or Executors | Adapter per provider | Not investigated |
 
@@ -128,6 +128,32 @@ flowchart LR
 ```
 
 Recommended integration summary: ChatGPT via a self-implemented, small OAuth+PKCE and Responses-SSE client (subject to the licence/terms review, ADR-0008) behind the Reasoner role; Claude Code via a child process in headless stream-json mode behind the Executor role (ADR-0006).
+
+## 6b. Claude Code executor: launch, approval and cancel model (PROPOSED design; behaviour verified in a spike, `docs/context.md` §13)
+
+```mermaid
+sequenceDiagram
+    participant App as Mushoku Guild (Executor adapter)
+    participant CLI as claude.exe (-p, stream-json)
+    participant Ap as Approver MCP server (child of CLI)
+    App->>App: discover claude.exe, check version, signature, auth status
+    App->>CLI: spawn (cwd=project, scrubbed env, prompt on stdin)
+    CLI-->>App: system/init, assistant, tool_use ... (NDJSON on stdout)
+    CLI->>Ap: tools/call approve {tool_name, input, tool_use_id}
+    Ap->>App: forward request (loopback socket / named pipe)
+    App->>App: user approves or denies in the UI
+    App-->>Ap: decision
+    Ap-->>CLI: {"behavior":"allow"|"deny", ...}
+    CLI-->>App: user tool_result, assistant text, result
+    Note over App,CLI: Cancel: stream-json interrupt, close stdin, wait; else taskkill /T /F on the tree
+```
+
+- **Discovery:** user override → `PATH` search for `claude.exe` → `%USERPROFILE%\.local\bin\claude.exe`; validate with `--version`, Authenticode signature (Anthropic, PBC) and `claude auth status`. Shims and `System32\bash.exe` (WSL) are never used.
+- **Launch:** `spawn(exe, args, {cwd, env: scrubbed, windowsHide, shell:false})`, prompt on stdin, always `--strict-mcp-config` plus only the app's own MCP config, explicit `--tools`, `--max-turns`, no `--dangerously-skip-permissions`.
+- **Approval (experimental, CLI 2.1.319-specific):** default is deny; per-action approval through `--permission-prompt-tool` pointing at a small approver MCP server that bridges to the app (extra child process per run). Pre-approved tool lists (`--allowedTools`) remain an option for low-risk steps.
+- **Cancel (graceful interrupt is experimental, CLI 2.1.319-specific):** graceful `interrupt` control request over stream-json input, then `taskkill /PID … /T /F` on the tree as fallback; treat a stream without `result` as aborted.
+- **Outcome:** decided from the `result` event (`subtype`, `is_error`, `terminal_reason`, `permission_denials`), not from the exit code.
+- **Limits:** relies on undocumented-but-observed behaviour in CLI 2.1.319 (interrupt message, approver contract, event fields). Not decided: whether to use a long-lived stream-json process per project or one process per task; this needs idle-cost measurement.
 
 ## 7. Data flow
 

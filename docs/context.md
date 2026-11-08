@@ -2,7 +2,7 @@
 
 Working memory for the project. Future sessions must read this first. Every item is labelled **[Confirmed]**, **[Assumption]** or **[Open]**. Do not promote assumptions to requirements without the user's agreement (record in `docs/DECISIONS.md`).
 
-_Last updated: 2026-11-08 (Phase 1 integration research)._
+_Last updated: 2026-11-08 (Phase 1 Claude Code CLI spike)._
 
 ## 1. What Mushoku Guild is
 
@@ -68,8 +68,8 @@ The goal is to **automate this workflow**, removing the manual copy/paste handof
 
 ## 8. Open questions
 
-1. **ChatGPT integration route:** a documented route exists (Sign in with ChatGPT plan usage, §11). **Open:** does a ChatGPT Go account qualify? Official developer docs name only Plus and Pro. Needs an authorization test or OpenAI confirmation. The fallback if not is undecided (user's own API key, another provider, or a plan upgrade).
-2. **Claude Code integration route:** a CLI subprocess (`claude -p`) is verified for a trivial call. **Open:** Anthropic's policy for an app that spawns the CLI under the user's subscription is not explicitly addressed (§11.3).
+1. **ChatGPT integration route:** the documented route worked in a spike (§12). **Still open:** (a) confirm in ChatGPT Settings that the tested account is on Go; (b) official docs still name only Plus and Pro, so Go eligibility is observed, not promised; (c) refresh/revocation/usage-limit behaviour untested; (d) licence/terms review (ADR-0008). Fallback if eligibility is later withdrawn is undecided.
+2. **Claude Code integration route:** the native Windows CLI as a child process works (§13). **Still open:** Anthropic's policy for an app spawning the CLI under the user's subscription is not addressed by the legal page (§11.3, §13.10); long-lived vs per-task process; behaviour on machines without Git; error paths (expired login, usage limits) untested.
 3. **Which platforms** must be supported at MVP?
 4. **MVP scope of the café:** static scene with status, or animated characters? How much "game" at first?
 5. **Approval model:** what exactly needs approval (prompt handoff, each tool call, each task)?
@@ -85,7 +85,7 @@ The goal is to **automate this workflow**, removing the manual copy/paste handof
 - Repository created at `https://github.com/techsmarttpk/mushoku-guild`, branch `main`.
 - Governance and design documents established.
 - **No application code exists. No technology has been chosen.**
-- Integration research is done (see §11). Only one integration fact was tested on this machine: a trivial headless Claude Code call. The ChatGPT flow has **not** been tested, and ChatGPT Go eligibility is **unconfirmed**.
+- Integration research is done (see §11). Two spikes have run on this machine: ChatGPT Sign in with ChatGPT (§12, succeeded end to end; Go is the user's statement, the tokens do not expose the plan) and the native Windows Claude Code CLI (§13, print mode, stream-json, permissions, cancellation and login retention all exercised and working; some behaviour is undocumented and observed only on CLI 2.1.319).
 
 ## 10. Things future sessions must retain
 
@@ -117,11 +117,11 @@ Sources: official OpenAI and Anthropic pages fetched 2026-11-08 by research suba
 - [Verified-doc] Limits: for Plus, a five-hour usage limit is shared across all apps using the plan; the five-hour limit does not apply to Pro. Users manage usage at `https://chatgpt.com/settings/usage`.
 - [Verified-doc] UI requirements: sign-in action labelled "Continue with ChatGPT"; show "Using ChatGPT plan" near the model selector with a "Manage usage" link; a first-time welcome modal; show the active account; distinguish plan usage from the app's own charges; approved branding only.
 
-**ChatGPT Go eligibility — UNCONFIRMED (the current developer docs name only Plus and Pro)**
+**ChatGPT Go eligibility — documentation silent; observed to work in one spike (§12); not confirmed by OpenAI**
 
 - [Verified-doc] No official developer page fetched mentions ChatGPT Go. The quickstart and cookbook say "Eligible ChatGPT Plus and Pro users" can use their plan.
 - [Conflicting] An OpenAI help-center article (help.openai.com/en/articles/20001542) could not be fetched (HTTP 403). A web-search summary reported that it says Go, Plus and Pro may use plan usage in participating *commercial* apps, that a newer revision limits this to Plus and Pro, and that open-source tools "remain available to all ChatGPT users". This was not confirmed from the primary text.
-- [Unverified] No authorization test with a Go account has been run. **Do not claim Go compatibility** until a test succeeds or OpenAI confirms it in writing.
+- [Unverified at the time of research; **superseded by §12**] No authorization test had been run. Update: a spike on 2026-11-08 succeeded for the user's account (§12.1), but the plan type is not visible in the tokens and OpenAI's docs still name only Plus and Pro, so **Go eligibility is observed, not confirmed in writing** (§12.2).
 
 **SDK availability and licensing**
 
@@ -140,7 +140,7 @@ Sources: official OpenAI and Anthropic pages fetched 2026-11-08 by research suba
 - [Verified-doc] Permissions: `--permission-mode default|acceptEdits|plan|auto|dontAsk|bypassPermissions`. In `-p`, with no mode set (v2.1.302+), calls needing approval are **denied** unless an allow rule, hook, SDK callback or `--permission-prompt-tool` approves them. `--permission-prompt-tool mcp__<server>__<tool>` lets an MCP tool answer prompts; `--permission-prompts host|none` also exists (both flags are listed in the local `--help`). Denials appear as `permission_denied` events and in the result's `permission_denials`; they do not fail the run.
 - [Verified-doc] Outcome detection: the result `subtype` is one of `success`, `error_during_execution`, `error_max_turns`, `error_max_budget_usd`, `error_max_structured_output_retries`; also `is_error`. `system/api_retry` events carry error categories (`rate_limit`, `authentication_failed`, ...). Exit code is 0 on success and non-zero on failure; exact numeric codes are not documented (SIGTERM gives 143). Do not rely on the exit code alone.
 - [Verified-doc] Auth precedence: if `ANTHROPIC_API_KEY` is set, `-p` always uses it instead of the subscription login. The app must not set it and should warn if it is present. On Windows credentials live in `%USERPROFILE%\.claude\.credentials.json`; the app must not read it.
-- [Unverified] Not yet tested or not documented: the stream-json **input** schema; the MCP `--permission-prompt-tool` request/response contract; the `PermissionRequest` hook schema; numeric exit codes; real `tool_use`/`tool_result` events; cancellation behaviour on Windows.
+- [Partly superseded by §13] Items below were unverified at research time; the interrupt control request, the MCP approver contract and real tool events were since observed (§13.3–§13.5). Still unverified: numeric exit codes for auth/limit failures; the official stream-json **input** schema; the MCP `--permission-prompt-tool` request/response contract; the `PermissionRequest` hook schema; numeric exit codes; real `tool_use`/`tool_result` events; cancellation behaviour on Windows.
 
 ### 11.3 Anthropic policy relevant to Mushoku Guild
 
@@ -151,3 +151,135 @@ Sources: official OpenAI and Anthropic pages fetched 2026-11-08 by research suba
 ### 11.4 Cross-provider implications
 
 - The ChatGPT route needs the full conversation history per request, no `max_output_tokens`/`temperature`, SSE streaming, and OAuth token lifecycle management. Claude Code needs a child process, NDJSON parsing and an approval channel. These differ enough that the abstraction separates **auth**, **role** and **transport** (see `docs/architecture.md` §6a).
+
+## 12. Spike result: ChatGPT authorization test (2026-11-08)
+
+Experiment: `spikes/chatgpt-siwc/spike.mjs` (disposable research experiment, not production code; zero dependencies, Node 24; see its README). It follows only the official docs re-read the same day (registration/sign-in and models/inference pages). Everything below was **observed on this machine** ([Verified-local]) in a single run; nothing was persisted and no token was printed. The OpenAI DevKit code was neither used nor read.
+
+### 12.1 Results
+
+| Step | Result |
+|------|--------|
+| Dynamic registration (`client_id=dynamic_agent_client`, `agent_name_hint=Mushoku Guild`, host ID `urn:uuid:…`) | **Succeeded.** The callback returned an issued `oaiapp_…` client ID. No partner approval, waitlist or API key was needed for this flow. |
+| Authorization (system browser, loopback `127.0.0.1:1455/auth/callback`, PKCE S256) | **Succeeded.** User signed in and consented in the browser; callback carried `code, scope, state, client_id`; state matched. |
+| Token exchange | **Succeeded.** Response fields: `access_token, id_token, refresh_token, token_type=Bearer, expires_in=3600, scope, earliest_refresh_at`. |
+| ID token validation | **Passed** (RS256 signature against the discovery `jwks_uri`, issuer, audience = issued client ID, expiry, nonce). |
+| Plan-usage scope | **Granted:** `chatgpt.tokens.use.direct email offline_access openid profile resource.invoke`. |
+| Model discovery (`GET /v1/models`) | **Succeeded:** 5 models returned, 3 with `visibility = list`: `gpt-6-luna` (GPT-6-Luna), `gpt-5.6-terra` (GPT-5.6-Terra), `gpt-5.6-luna` (GPT-5.6-Luna). The docs' example slug `gpt-6.1-sol` was **not** in this account's list, which confirms models must be discovered, never hard-coded. |
+| Streaming inference (`POST /v1/responses`, `store:false, stream:true`, first listed model `gpt-6-luna`, prompt "Say exactly: Hello, world!") | **Succeeded.** Output "Hello, world!", `response.completed` received. Usage object: 13 input tokens, 8 output tokens, 21 total, plus a per-item `attribution` breakdown. |
+
+### 12.2 Was the Go subscription accepted?
+
+**Observed: the signed-in ChatGPT account was accepted and plan usage worked end to end.** Caveats that keep this from being a clean "Go is eligible" claim:
+
+- [Unverified] The tokens contain **no plan-type claim** (ID-token `https://api.openai.com/auth` held only `per_user_salt`; the access token held `per_user_salt` and `encrypted_auth_metadata`). Nothing in the run proves which plan the account is on. That it is a **ChatGPT Go** account rests on the user's statement; the user should confirm under ChatGPT Settings that the plan shown is Go (and not, for example, a Plus trial) before this is treated as settled.
+- [Verified-doc, unchanged] OpenAI's developer docs still name only Plus and Pro. A successful test shows the flow currently works for this account; it is not a written commitment that Go stays eligible. The help-center article (HTTP 403 earlier) is still unread. Eligibility could change; the app must handle `subscription_sharing_user_not_eligible` gracefully.
+- Single account, single run, one region/time.
+
+### 12.3 Limits and unknowns
+
+- Not observed: any usage-limit or rate-limit error; the size of the Go allowance. The streamed `usage` object reports tokens only. Response headers were **not** inspected, so whether remaining-quota information is exposed is unknown.
+- Not tested: token refresh and rotation, revocation, reauthorization with `id_token_hint`, `instructions`/developer-message input, multi-turn history, longer outputs, `response.incomplete`/mid-stream failure handling, behaviour after the 1-hour access-token expiry, tool use, image input.
+- The spike verified only RS256 ID tokens (the type returned) and handles a single account.
+- The access token is a decodable JWT, but its claims are not a contract; the app should treat it as opaque.
+- Side effect: authorizing created a connected-app grant ("Mushoku Guild") in the user's ChatGPT account. The spike kept the refresh token only in memory and **did not revoke it**, so the grant remains until the user disconnects it in ChatGPT Settings (or it expires after 30 days).
+
+### 12.4 Safety and production suitability
+
+- Safety of the experiment: the user's password was never requested (sign-in happened on `auth.openai.com`); tokens were not printed or stored; output was passed through a redactor; only documented endpoints were used; no API key, cookies, or website automation. The printed authorization URL contained only single-use values (state, nonce, PKCE challenge) and a random host ID.
+- **Not suitable for production** as written (no persistence, refresh, revocation, error taxonomy, port-conflict handling, multi-account support, tests). It is suitable as **evidence**: the documented flow is implementable from the public docs with built-in libraries in roughly 200 lines, which supports the feasibility of ADR-0008. The licence/terms question for ADR-0008 remains open.
+- The `spikes/` directory is committed only as disposable Phase 1 research evidence (each spike has a README saying so). It is not production code; delete it when Phase 1 concludes or when the real implementation replaces it.
+
+## 13. Spike result: native Windows Claude Code CLI (2026-11-08)
+
+Experiment: `spikes/claude-cli/` (`spike.mjs`, `mcp-approver.mjs`; disposable research experiment, not production code; zero dependencies, Node 24 `child_process`). It launched the user's existing native Windows `claude.exe` in print mode with `--output-format stream-json` against throwaway test projects under the system temp directory. Everything below is **observed on this machine** ([Verified-local]) unless labelled otherwise. Rules kept: no WSL, no API key, no Agent SDK, no `--dangerously-skip-permissions`, binary unmodified, credential files never read, no env values printed. Raw event logs were written outside the repo (system temp) and are not committed. A Rust launcher was **not** tried (Node was sufficient for the questions asked).
+
+All runs used `--model haiku` (alias accepted; resolved to `claude-haiku-5-5`) to limit the user's subscription usage. Behaviour with other models was not tested.
+
+### 13.1 Executable discovery strategy
+- [Verified-local] The native installer places `claude.exe` in `%USERPROFILE%\.local\bin` and that directory is on `PATH`. A PATH search for `claude.exe` found `%USERPROFILE%\.local\bin\claude.exe` (329 MB).
+- [Verified-local] Validation steps that worked: (1) file exists; (2) `claude.exe --version` prints `2.1.319 (Claude Code)` and matches `^\d+\.\d+\.\d+`; (3) `Get-AuthenticodeSignature` reports **Status `Valid`, signer `CN="Anthropic, PBC"`**, which gives a cheap integrity check that the binary is the unmodified published one; (4) `claude auth status` returns JSON (`loggedIn`, `authMethod: "claude.ai"`, `apiProvider: "firstParty"`; other fields such as email and org were deliberately not printed).
+- Proposed order: user override setting → `PATH` search for `claude.exe` → `%USERPROFILE%\.local\bin\claude.exe` → manual "browse for claude.exe". `.cmd`/`.ps1` shims (npm install) are **not** launched (Node cannot spawn `.cmd` without a shell, and a shell adds quoting risk). Other install locations are unverified guesses.
+- Also observed: `where bash` lists both Git Bash (`C:\Program Files\Git\usr\bin\bash.exe`) and `C:\Windows\System32\bash.exe`, which is the **WSL launcher**; the app must never invoke it. Claude Code's own Bash tool used Git Bash.
+
+### 13.2 Process-launching strategy
+- [Verified-local] `spawn(claudeExe, args, { cwd: projectDir, env, windowsHide: true, stdio: ["pipe","pipe","pipe"] })`, `shell: false`, args as an array. The prompt is written to **stdin** and stdin is closed (avoids command-line length/quoting limits; the docs cap piped stdin at 10 MB).
+- [Verified-local] Flags used: `-p --output-format stream-json --verbose --no-session-persistence --disable-slash-commands --strict-mcp-config --setting-sources project,local --model haiku --tools <list> [--permission-mode … | --allowedTools … | --permission-prompt-tool …] --max-turns N`. `--verbose` is required for stream-json in print mode (per docs and used throughout).
+- [Verified-local] **Environment scrubbing:** the app's own shell here carried this session's `CLAUDECODE`, `CLAUDE_CODE_*` (including a messaging token), `CLAUDE_PID`, `CLAUDE_EFFORT` and `AI_AGENT` variables. The spike removes them before spawning, as a desktop app launched normally would not have them. The child then ran as a clean session (`apiKeySource: "none"`). No `ANTHROPIC_*` variable was set; if one is, the CLI would prefer it over the subscription login (docs), so the app must detect and warn.
+- [Verified-local] `--strict-mcp-config` removed the user's **claude.ai account connectors (Gmail, Docs)**, which otherwise auto-connect inside headless runs and become tools the agent can call. The app should always pass it and supply only its own MCP config.
+- [Verified-local] `--setting-sources project,local` skipped the user's global plugins and hooks (the user's SessionStart hook, which ran in the earlier Phase 1 test, did not run). Whether the app should honour user-level settings is a product decision, not made here.
+- Working directory is the child's `cwd` (there is no `--cwd` for `-p`); backslash Windows paths worked.
+
+### 13.3 Streaming event schema (observed, not an official schema)
+stdout is newline-delimited JSON; every line parsed (no non-JSON lines). Event `type`/`subtype` seen and their useful fields (names only; contents omitted):
+
+| Event | Key fields observed |
+|-------|--------------------|
+| `system/init` | `session_id, cwd, model, permissionMode, apiKeySource, claude_code_version, tools[], mcp_servers[{name,status}], capabilities[], plugins, skills, agents, powershell_path, memory_paths, …` |
+| `system/status`, `system/thinking_tokens`, `system/task_started` (`task_id, tool_use_id, description, task_type`) | progress/housekeeping |
+| `assistant` | `message.content[]` blocks of `text`, `thinking`, `tool_use {id, name, input}`; `parent_tool_use_id`, `session_id`, `uuid` |
+| `user` | `message.content[]` `tool_result {tool_use_id, content}`; `tool_use_result`; error results are flagged |
+| `system/permission_denied` | `tool_name, tool_use_id, message` (human-readable reason, e.g. output redirection needs approval) |
+| `stream_event` (only with `--include-partial-messages`) | wraps raw API events: `message_start`, `content_block_start/delta/stop` (`text_delta`, `thinking_delta`, `signature_delta`), `message_delta`, `message_stop` |
+| `rate_limit_event` | `rate_limit_info {status, rateLimitType, resetsAt, unifiedWindows.five_hour/seven_day {utilization, resetsAt, status}, overageStatus, isUsingOverage}` |
+| `control_response` (stream-json input only) | `response {subtype, request_id, response}` |
+| `result` | `subtype` (`success`, `error_during_execution`), `is_error`, `terminal_reason` (`completed`, `aborted_streaming`), `num_turns`, `result` (text), `total_cost_usd`, `usage`, `permission_denials[]`, `session_id`, `duration_ms`, `ttft_ms`, `credential_expires_at`, `api_error_status`, `modelUsage` |
+
+Typical successful edit: `system/init → assistant[tool_use:Write] → rate_limit_event → user[tool_result ok] → assistant[text] → result/success`. Event order is not strictly guaranteed (for example `rate_limit_event` appears between others). The schema is observed from one CLI version (2.1.319); the docs give a field table only for `api_retry`, `plugin_install` and parts of `init`, so the app must parse defensively and ignore unknown events/fields.
+
+### 13.4 Permission handling
+- [Verified-local] **Default mode in `-p` denies** anything needing approval. Asked to create a file, Claude tried `Bash` (output redirection) and then `Write`; each produced a `system/permission_denied` event followed by an error `tool_result`, the file was **not** created, `permission_denials: ["Bash","Write"]` appeared in `result`, and the run still ended `result/success`, `is_error: false`, exit code 0. A denial is therefore **not** a failure signal; the app must read `permission_denied` events and `permission_denials`.
+- [Verified-local] `--permission-mode acceptEdits` allowed `Write` inside the project; the file was created with exactly the requested content, no denials.
+- [Verified-local] **`--permission-prompt-tool mcp__<server>__<tool>` works for interactive-style approval.** A minimal stdio MCP server (built from raw JSON-RPC, no SDK) exposed one tool, `approve`. Claude Code started it per run (`mcp_servers: approver connected`), sent `initialize`, `tools/list`, then called the tool for the pending action with arguments **`{tool_name, input, tool_use_id}`** (for example `Bash` with `input.command` and `input.description`). The tool's reply is a text content block containing JSON:
+  - allow: `{"behavior":"allow","updatedInput":<input object>}` → the command ran, the file was created, `permission_denials: []`.
+  - deny: `{"behavior":"deny","message":"…"}` → the action did not run, the message was visible to Claude (it quoted the approver's name back), and `permission_denials: ["Bash"]`.
+  The shape matches the Agent SDK's documented `canUseTool` result; the MCP request/response contract itself is **not documented** in the pages fetched, so this is an observed contract for 2.1.319 that may change. Round-trip to the approver was fast (the call arrived about 1.9 s into the run).
+- Design consequence (proposed): the approver would be a tiny MCP server process that forwards each request to the Mushoku Guild app (loopback socket or named pipe), waits for the user's click, then returns allow/deny. The run blocks while waiting; a timeout/cancel policy is needed. It adds one more child process per run.
+- [Unverified] `--permission-prompts none`, `auto` and `dontAsk` modes, `updatedPermissions` ("always allow"), `AskUserQuestion` handling, and behaviour when the approver is slow or crashes were not tested.
+
+### 13.5 Cancellation behaviour (Windows)
+| Method | Observed |
+|--------|----------|
+| `child.kill()` while text is streaming | Process ended immediately; Node reports `exitCode: null, signal: SIGTERM` (Windows forced termination). **No `result` event.** |
+| `child.kill()` while a Bash tool was running (`ping`) | Claude exited, but **the tool's child process (`ping.exe`) survived as an orphan** (confirmed, then cleaned up manually). Not acceptable for real tasks. |
+| `taskkill /PID <pid> /T /F` during the same tool run | Whole tree terminated (`conhost`, three `bash.exe`, `ping.exe`); **no orphans**; exit code 1; no `result` event. |
+| Graceful: stream-json **input** with `{"type":"control_request","request_id":"…","request":{"subtype":"interrupt"}}` written to stdin mid-stream | CLI replied `control_response {subtype:"success", response:{still_queued:[]}}`, then emitted a final **`result` with `subtype: error_during_execution`, `is_error: true`, `terminal_reason: "aborted_streaming"`**; exit code 1 after stdin was closed. Process exited cleanly. `init.capabilities` listed `interrupt_receipt_v1`, `interrupt_cancel_queued_v1`, `interrupt_send_now_v1`, `interrupt_requeue_taken_v1`. |
+
+Conclusions: (1) prefer the graceful stream-json interrupt, then close stdin, then wait briefly; (2) fall back to `taskkill /T /F` on the whole process tree (never bare `child.kill()`); (3) after any forced kill, treat the run as aborted with no result. The interrupt message shape is **observed, not officially documented** in the pages fetched. The documented `SIGTERM → exit 143` behaviour does not apply on Windows (not testable: Node's `kill` is a forced termination). Console Ctrl+C events (`GenerateConsoleCtrlEvent`) were **not** tried. A Windows Job Object (kill-on-close) as a safety net for crashes of the host app was not tried.
+
+### 13.6 Error handling
+- Exit code **0** for every run that produced a result, including runs with permission denials. Exit **1** after an interrupt (`error_during_execution`) and after `taskkill /F`. Node reports `null` + `SIGTERM` for `child.kill()`. Do not rely on the exit code; use the `result` event (`subtype`, `is_error`, `terminal_reason`) and treat "stream ended without a `result`" as an abort/crash.
+- stderr was empty in all runs. Not exercised (and deliberately not forced, to avoid touching the login): expired/revoked login, usage-limit errors, `error_max_turns`, `error_max_budget_usd`, `api_retry` events, malformed prompts, missing Git Bash. The docs say auth failures are printed as a result on stdout and `system/api_retry` events carry categories such as `authentication_failed` and `rate_limit`.
+- `claude auth status` exposes a login expiry; `result.credential_expires_at` shows the credential expiry too. The expiry date is shown by these commands; once it passes, unattended runs fail until the user logs in again with the CLI. The app should surface this date.
+
+### 13.7 Subscription login retention (without touching credentials)
+- [Verified-local] Every `claude -p` run authenticated on its own with **no interaction**, `apiKeySource: "none"`, no `ANTHROPIC_*` variable, and no credential file read or copied by the spike. `claude auth status` returned `loggedIn: true, authMethod: "claude.ai"` before and after every scenario (8 scenario runs including aborts and forced kills). So the existing Claude Pro login persists across separate child processes and across forced kills.
+- The spike never ran `claude auth logout`, never set tokens, and never read `%USERPROFILE%\.claude\.credentials.json` or any keychain.
+- Usage is metered against the subscription: the `rate_limit_event` (`five_hour`, `seven_day` utilisation) arrived in every run and is a ready-made status source (observed, undocumented). The five-hour utilisation read 0.06 at the start of Phase 1 and 0.16 at the end of these tests, but that figure covers the user's whole account and cannot be attributed to the spikes.
+
+### 13.8 Resource consumption (indicative; PowerShell CIM sampled every ~0.7 s, so peaks are approximate and short runs have only 2–5 samples)
+| Run | Wall time | First event | Peak working set (process tree) | Processes | Tokens (cache create / read) | Est. cost (CLI's own estimate) |
+|-----|-----------|-------------|-------------------------------|-----------|------------------------------|-------------------------------|
+| Minimal: one `Write`, MCP/slash/user-settings disabled (3 tools) | 4.8 s | 1.0 s | ≈ 207 MB | 2 | 3.5k / 10.1k | $0.0009 |
+| Same task with the user's claude.ai connectors still loaded (41 tools), first denial run | 8.0 s | 2.2 s | ≈ 232 MB | 4 | 39.5k / 78.1k | $0.009 |
+| Bash tool run (`ping`) | ≈ 8 s (cancelled) | 1.6 s | ≈ 236–285 MB | 7–8 (`conhost`, `bash` ×3, `ping`, optional MCP approver `node`) | — | — |
+| Earlier Phase 1 test with the user's full global config, default model | 3.2 s | 3.2 s | — | — | 110k / 0 | $0.44 |
+
+Takeaways: a running `claude.exe` costs roughly 200 MB of RAM even for a trivial task, so Mushoku Guild's own footprint must be judged separately from the agent it launches (the lightweight requirement applies to our app; the agent is the user's tool). Startup to first event is about 1–3 s. The dominant avoidable cost is context: `--strict-mcp-config` and disabling user settings cut cache tokens by roughly 10x and estimated cost by roughly 10–500x versus loading the user's whole configuration. Idle cost of a long-lived multi-turn stream-json process was not measured.
+
+### 13.9 Windows-specific considerations
+- Use the native `.exe`; never launch `.cmd`/`.ps1` shims; never use `C:\Windows\System32\bash.exe` (WSL).
+- Kill the whole process tree (`taskkill /T /F`) because tools spawn `conhost.exe`, `bash.exe` and grandchildren; consider a Job Object so children die if the host app crashes (untested).
+- Pass `windowsHide: true` to avoid console windows; use `shell: false`.
+- The Bash tool relied on Git for Windows' `bash.exe`; `init.powershell_path` was also reported. Behaviour on machines without Git is **unverified** (docs fetched did not cover it).
+- Scrub inherited `CLAUDE*`/`AI_AGENT` variables; detect `ANTHROPIC_*`.
+- Paths with backslashes and a temp-directory project worked; paths with spaces, UNC paths and very long paths were not tested.
+- Sampling processes via PowerShell/CIM works but costs a PowerShell start per sample; production code should prefer a native API.
+
+### 13.10 Subscription and policy considerations
+- The design still matches ADR-0006: the app launches the user's own, unmodified (Authenticode-valid Anthropic, PBC) binary; never reads, copies, stores or transmits credentials; sets no token or API key; does not use the Agent SDK; one user, one machine; documented CLI flags only.
+- The legal page's open question stands: it does not mention spawning `claude -p` from another program, and it says plan limits "assume ordinary, individual usage". Automated, high-volume or multi-agent use could be judged not ordinary. Treat the Anthropic query (plan.md) as a release blocker, and do not market the app as a way to use the subscription on behalf of others.
+- Product guardrail candidates (not decided): always pass `--strict-mcp-config`; surface subscription utilisation from `rate_limit_event`; show the login expiry; refuse to start if `ANTHROPIC_API_KEY` is set unless the user chooses API billing explicitly.
+
+### 13.11 Limits of this spike
+Single machine, single CLI version (2.1.319), small tasks, one model alias (`haiku`), Node launcher only. Undocumented behaviours used (interrupt `control_request`, MCP prompt-tool contract, event fields) may change between CLI versions; the app should pin and test against a minimum version and degrade to `taskkill` when graceful interrupt is unavailable. The test harness is not production code and is suitable only as evidence.
