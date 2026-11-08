@@ -99,13 +99,14 @@ Template:
   4. **Claude CLI consumption is measured separately.** `claude.exe` and its child processes are the user's tool and are reported separately from Mushoku Guild's own usage; budgets apply to Mushoku Guild only. Combined figures may be reported for information but are not budget inputs.
 - **Alternatives considered:** No numeric budgets (rejected: the requirement says measurable); tighter numbers copied from other apps (rejected: no baseline for this stack); including `claude.exe` in the budget (rejected: it dominates the total and is outside the app's control).
 - **Phase 2 gate result (2026-11-08):** measured; RAM as literally defined fails, everything else measured passes. Evidence and the proposed amendment A: `docs/architecture.md` §13 and the entry under "Proposed" below. **No change to this ADR has been made.**
+- **Amendment A (ACCEPTED 2026-11-08 by the owner):** the memory budget metric is the **private working set of the Mushoku Guild process tree** (app + WebView2 processes; `claude.exe` still excluded and measured separately). Targets: **idle <= 120 MB, active <= 140 MB** (hard limits 150 / 180 MB). The original figures (180/260 MB summed working set) are kept above as the original wording. Evidence for the change: a blank Tauri + WebView2 page already sums to 355 MB of working sets because the seven WebView2 processes share pages, so the summed metric double-counts and cannot be met by any app on this stack; the measured private working set is 84 MB blank / 90 MB idle / 96 MB active (`docs/architecture.md` §13, `docs/measurements/phase2/`). Summed working set is still reported next to it. Two design rules from measurement are adopted: no `requestAnimationFrame` loop in idle states, and all renderer tickers stopped when minimised. Open metrics: 8 h memory growth, idle disk writes, visible-but-unfocused CPU, first-launch start-up.
 - **Consequences:** The Phase 2 gate produces the first real measurements; performance regressions become test failures only for metrics with recorded baselines; the "lite" mode is a first-class feature.
 
 ---
 
 ## Proposed (not decided)
 
-Nothing below is accepted (ADR-0007, ADR-0008 and ADR-0009 remain open). Each needs the user's agreement and, where noted, evidence first. Accepting ADR-0010, ADR-0011 and ADR-0012 did not accept any of these.
+**Phase 3 note (2026-11-08):** the owner's Phase 3 instruction directs implementing the Sign in with ChatGPT integration (ADR-0007, ADR-0008) and a Reasoner/Executor provider boundary (ADR-0009). These are therefore **accepted for implementation as an EXPERIMENTAL integration**; their entries below are kept with their original text and a status note. This does **not** resolve the external blockers: OpenAI documents only Plus/Pro for this flow (Go eligibility is unconfirmed and must never be claimed), the DevKit/terms licence review is open, and Anthropic's third-party subscription-use policy is open (`docs/plan.md` release blockers). Nothing is to be marketed or distributed as approved until those are resolved.
 
 ### ADR-0007 (proposed): Use Sign in with ChatGPT plan usage as the ChatGPT route
 - **Date proposed:** 2026-11-08
@@ -114,7 +115,7 @@ Nothing below is accepted (ADR-0007, ADR-0008 and ADR-0009 remain open). Each ne
 - **Alternatives considered:** An OpenAI API key (separately billed, contradicts the user's goal); another provider such as DeepSeek through an API key; upgrading to Plus.
 - **Consequences if accepted:** Mushoku Guild must be open-source and local, follow OpenAI's UI/UX rules, and handle OAuth tokens and usage limits. If the Go test fails, a fallback decision is required.
 - **Accept when:** The Go test passes, or the user chooses to proceed regardless.
-- **Evidence update (2026-11-08, `docs/context.md` §12):** A spike authorized, listed models and streamed an inference successfully with the user's account, so the gating test has passed in practice. Caveats: the plan type is not visible in the tokens (Go is the user's statement), OpenAI's docs still name only Plus and Pro, and refresh/usage-limit behaviour and the terms review are outstanding. **Status remains `proposed`; it has not been accepted.** It needs the user's explicit decision.
+- **Evidence update (2026-11-08, `docs/context.md` §12):** A spike authorized, listed models and streamed an inference successfully with the user's account, so the gating test has passed in practice. Caveats: the plan type is not visible in the tokens (Go is the user's statement), OpenAI's docs still name only Plus and Pro, and refresh/usage-limit behaviour and the terms review are outstanding. **Status: accepted for experimental implementation by the owner's Phase 3 instruction (2026-11-08); eligibility, terms and refresh/usage-limit behaviour still to be verified in the product.**
 
 ### ADR-0008 (proposed): Implement the documented protocol ourselves instead of depending on the DevKit
 - **Date proposed:** 2026-11-08
@@ -122,7 +123,7 @@ Nothing below is accepted (ADR-0007, ADR-0008 and ADR-0009 remain open). Each ne
 - **Proposed decision:** Implement the small documented OAuth/PKCE + Responses SSE client behind our own adapter, using the DevKit only as a reference, subject to a licence/terms review.
 - **Alternatives considered:** Depending on or vendoring `@siwc/local` (licence and stack coupling); the Codex app-server route (adds a heavy dependency).
 - **Accept when:** The licence/terms review concludes this is acceptable.
-- **Evidence update (2026-11-08, `docs/context.md` §12):** The spike implemented the documented flow from the public docs alone (no DevKit code used or read) in about 200 lines with Node built-ins, which shows technical feasibility. The licence/terms question is unresolved. **Status remains `proposed`.**
+- **Evidence update (2026-11-08, `docs/context.md` §12):** The spike implemented the documented flow from the public docs alone (no DevKit code used or read) in about 200 lines with Node built-ins, which shows technical feasibility. The licence/terms question is unresolved. **Status: accepted for implementation by the owner's Phase 3 instruction (2026-11-08); the product implements the protocol in Rust without the DevKit; licence/terms review still open.**
 
 ### ADR-0009 (proposed): Provider abstraction with separate auth, role and capability interfaces
 - **Date proposed:** 2026-11-08
@@ -130,8 +131,9 @@ Nothing below is accepted (ADR-0007, ADR-0008 and ADR-0009 remain open). Each ne
 - **Proposed decision:** Two provider roles (Reasoner for prompt engineering, Executor for task execution), a separate auth interface, a shared error taxonomy, and a registry, so new providers (for example DeepSeek) are adapters only.
 - **Alternatives considered:** One universal "Agent" interface (the earlier sketch), which mixes streaming chat with long-running tool-using jobs and forces a lowest-common-denominator design.
 - **Accept when:** The user reviews it and it is validated against both real adapters in Phase 3.
+- **Status (2026-11-08):** implemented in Phase 3 as the smallest boundary that works (separate Rust modules `chatgpt` for the Reasoner and `claude` for the Executor, a shared error taxonomy); no registry or plugin system. Accepted for implementation by the owner's Phase 3 instruction.
 
-### ADR-0012 amendment A (PROPOSED — not accepted; needs the user's decision)
+### ADR-0012 amendment A (ACCEPTED 2026-11-08 — moved to ADR-0012 below)
 - **Date proposed:** 2026-11-08 (Phase 2 measurement gate, `docs/architecture.md` §13)
 - **Context:** ADR-0012 asks to document evidence and propose a revised target when a target proves unrealistic. The gate measured the RAM targets as literally defined (sum of working sets of the process tree) at 371 MB idle and 377 MB active, against 180/260 MB targets and 250/350 MB limits. A **blank** Tauri + WebView2 page, with no Pixi at all, already sums to 355 MB, because the seven WebView2 processes share most of their pages. By **private** working set the same measurements are 84 MB (blank), 90 MB (idle) and 96 MB (active). So the targets cannot be met by any application on this stack with this metric, while the actual memory the app adds is small.
 - **Proposed change (measurements are on one machine, three runs per state):**
@@ -142,7 +144,7 @@ Nothing below is accepted (ADR-0007, ADR-0008 and ADR-0009 remain open). Each ne
   5. Keep these as explicitly **open** metrics, to be measured when the pieces exist: memory growth over 8 hours, idle disk writes, visible-but-unfocused CPU, first-ever-launch start-up.
 - **Alternatives considered:** Keep the literal metric and fail the gate (a pass is impossible on this stack, so it would only block work); count only the app and renderer processes (arbitrary, hides real memory); use "commit" or "private bytes" (not measured here; private working set was available and comparable to Task Manager's "active private working set").
 - **Consequences if accepted:** the gate for memory becomes meaningful; the stack decision (ADR-0010) stands; ADR-0012 is edited to record the amendment (never silently).
-- **Status:** proposed. `docs/architecture.md` §9 keeps showing the original targets until the user decides.
+- **Status:** **accepted by the owner on 2026-11-08** (Phase 3 instruction): private working set is the memory metric; targets 120 MB idle and 140 MB active. The limits (150/180 MB) proposed above were not mentioned by the owner and are kept as the hard limits.
 
 ### Other candidate decisions (not yet drafted)
 - Credential storage mechanism (Windows Credential Manager vs protected file).

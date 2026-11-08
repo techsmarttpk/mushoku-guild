@@ -137,24 +137,21 @@ Phase 1 tasks left unticked above were **not completed**; they are carried forwa
 - **Acceptance criteria:** A fresh clone builds, lints and tests from documented commands; CI is green; the skeleton runs on the reference laptop; baseline measurements are recorded; the gate decision is recorded and approved by the user; no feature code exists.
 - **Testing requirements:** Measurement runs are repeatable and recorded verbatim (including failures); lint and tests pass; installer artifact installs and uninstalls cleanly on the dev machine.
 
-## Phase 3 — MVP: headless orchestration core + real agent integration (provisional)
+## Phase 3 — MVP: the working product (started 2026-11-08 on the owner's explicit instruction)
 
-- **Status:** planned
-- **Objective:** A working task pipeline with approval gates and real agents, usable without the café UI.
-- **Deliverables:** Event bus, task state machine, approval gate, Agent adapter interface, working Claude Code adapter, working prompt-agent adapter, minimal persistence (if confirmed).
-- **Dependencies:** Phase 2 gate passed; ADR-0007, ADR-0008, ADR-0009 decided; project licence and credential-storage decisions (`docs/context.md` §15.2).
-- **Tasks:**
-  - [ ] Implement event types and bus
-  - [ ] Implement task state machine with unit tests
-  - [ ] Implement approval gate with unit tests
-  - [ ] Define adapter interface; implement fake agent for tests
-  - [ ] Implement Claude Code adapter
-  - [ ] Implement prompt-agent adapter
-  - [ ] Wire the end-to-end pipeline: describe → prompt → approve → execute → result
-  - [ ] Cancellation and failure handling; child-process cleanup
-  - [ ] Config and secret handling
-- **Acceptance criteria:** A real task runs end-to-end through real agents with user approval, from a minimal interface; failures are surfaced; no orphan processes.
-- **Testing requirements:** Unit tests for core; adapter contract tests; at least one verified real end-to-end run recorded.
+- **Status:** in-progress. The owner merged the former Phase 3 (core), Phase 4 (café) and parts of Phase 5 into one execution on 2026-11-08 and accepted ADR-0012 amendment A. Phase 2 tasks 2.7–2.10 (tooling, security baseline, CI, doc refresh) were not run separately; the parts the product needs (CSP/capabilities, lint/test commands) are done here and ticked below.
+- **Objective:** end-to-end workflow: describe task → ChatGPT drafts a Claude prompt (streamed) → user edits/approves → Claude Code executes with real events and permission prompts → result accepted or changes requested; café reacts to real state; history persists in SQLite.
+- **Tasks (tick only when verified):**
+  - [x] A. Accept ADR-0012 amendment A (private working set, 120/140 MB); record ADR-0007/8/9 as accepted-for-experimental-implementation
+  - [ ] B. Café redesign (original pixel art generated in code; state-driven scene)
+  - [ ] C1. Rust core: SQLite persistence + migrations
+  - [ ] C2. ChatGPT Reasoner (OAuth PKCE, Windows Credential Manager, models, streamed Responses)
+  - [ ] C3. Claude Executor (detect, spawn, stream-json, approver, cancel, tree kill)
+  - [ ] D. Orchestration workflow + UI (project, task, prompt edit/approve, policy, activity, permissions, result, history)
+  - [ ] E. Integration run on a disposable project; process cleanup; performance re-measure; NSIS installer install/uninstall
+  - [ ] Remove or gate the Phase 2 `bench_*` fixtures (decide at E)
+- **Acceptance criteria:** the 16-step workflow in the owner's Phase 3 brief works with the real providers (ChatGPT subject to account eligibility), no orphan processes, no secrets in logs or Git, records survive restart, installer installs/launches/uninstalls.
+- **External blockers (unchanged, see release blockers):** OpenAI Go eligibility unconfirmed; OpenAI DevKit/terms review; Anthropic third-party subscription-use policy. The app is a local, user-controlled integration and must not be distributed or marketed as approved.
 
 ## Phase 4 — MVP: presentation layer, café v1 (provisional)
 
@@ -236,3 +233,4 @@ These must be resolved before any public distribution. They do not block startin
 - 2026-11-08 — Phase 1 closure proposals added: stack evaluation, MVP scope, resource budgets, blocker classification, detailed Phase 2 plan. ADR-0010/0011/0012 drafted as `proposed`. Phase 1 marked ready to close pending user approval; the measured-baseline items moved to the Phase 2 gate rather than being claimed. No tasks removed; Phase 2 task list was replaced by a more detailed one (the old provisional list was: scaffold, tooling, CI, empty window, baseline measurement; all are covered by tasks 2.1–2.9).
 - 2026-11-08 — User accepted ADR-0010, ADR-0011 and ADR-0012 (the latter as provisional targets with binding qualifications). Phase 1 marked completed with an explicit closure note; unticked Phase 1 tasks carried forward (not dropped) to Phase 2, Phase 3 and the new release blockers register. Phase 2 prepared (start procedure, ordering and gate rules) but not started. ADR-0007, ADR-0008 and ADR-0009 remain proposed. No tasks removed.
 - 2026-11-08 — Phase 2 tasks 2.0–2.6 completed and verified; measurement gate assessed (`docs/architecture.md` §13) and left for the user's review. Tasks 2.7–2.10 untouched. ADR-0012 amendment A drafted as `proposed`. Carried-forward items added to Phase 2. No tasks removed.
+- 2026-11-08 — Owner started Phase 3 (full product). ADR-0012 amendment A accepted. ADR-0007/8/9 accepted for experimental implementation (not for distribution). Phase 3 section rewritten to the owner's A–E milestones; old Phase 3 task list superseded (its intent is covered). Kenney assets could not be fetched (site blocks scripted download; I did not bypass it): café art is original and generated in code.
