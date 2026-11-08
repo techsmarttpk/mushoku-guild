@@ -129,3 +129,22 @@ test("a launched website is added to the open quest once, and stays separate fro
   assert.equal(s.detail?.task.status, "completed", "the quest is completed even though its server is still running");
   assert.equal(ev(selected(), { type: "service_found", taskId: 99, service: svc }).services.length, 0);
 });
+
+test("the Git state in the UI is whatever the backend last pushed, and only for the open repository", () => {
+  const repo = (head: string) => ({ isRepo: true, root: "", branch: { head, oid: "a", detached: false, upstream: null, ahead: 0, behind: 0 }, entries: [], staged: 0, modified: 0, untracked: 0, conflicted: 0, clean: true, operation: null, lastFetchMs: null, historyToken: head, error: null });
+  let s = reduce({ ...initialState, currentProjectId: 1 }, { type: "event", event: { type: "repo_state", projectId: 1, state: repo("main") } });
+  s = reduce(s, { type: "event", event: { type: "repo_state", projectId: 1, state: repo("feature/auth") } });
+  assert.equal(s.repo?.branch.head, "feature/auth", "a branch change made outside the UI (for example by Claude) shows up");
+  s = reduce(s, { type: "event", event: { type: "repo_state", projectId: 2, state: repo("other-repo") } });
+  assert.equal(s.repo?.branch.head, "feature/auth", "another repository's state is ignored");
+  assert.equal(reduce(s, { type: "project_switched", projectId: 2 }).repo, null, "switching repositories drops the old state");
+});
+
+test("the output panel is bounded and keeps the newest lines", () => {
+  let s = reduce({ ...initialState, currentProjectId: 1 }, { type: "patch", patch: {} });
+  for (let i = 0; i < 1600; i++) s = reduce(s, { type: "event", event: { type: "git_output", projectId: 1, text: `line ${i}`, error: false } });
+  assert.equal(s.output.length, 1500);
+  assert.equal(s.output.at(-1)?.text, "line 1599");
+  s = reduce(s, { type: "event", event: { type: "cmd_exit", projectId: 1, runId: 3, code: 1 } });
+  assert.equal(s.output.at(-1)?.stream, "err");
+});

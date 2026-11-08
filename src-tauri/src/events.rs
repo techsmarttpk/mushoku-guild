@@ -61,6 +61,11 @@ pub enum AppEvent {
     ChatFailed { conversation_id: i64, generation: u64, kind: ErrorKind, message: String },
     ResearchActivity { project_id: i64, activity: Activity },
     ResearchFinished { project_id: i64, research: Research },
+    /// The authoritative Git state of the watched repository (pushed whenever it changes).
+    RepoState { project_id: i64, state: Box<crate::git::RepoState> },
+    GitOutput { project_id: i64, text: String, error: bool },
+    CmdOutput { project_id: i64, run_id: u64, stream: String, text: String },
+    CmdExit { project_id: i64, run_id: u64, code: i32 },
     ServiceFound { task_id: i64, service: ServiceRow },
     ChatResearching { conversation_id: i64, generation: u64, objective: String },
     ChatAgentMessage { conversation_id: i64, generation: u64, message: ChatMessage },

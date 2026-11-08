@@ -132,6 +132,10 @@ export type AppEvent =
   | { type: "chat_delta"; conversationId: number; generation: number; text: string }
   | { type: "chat_done"; conversationId: number; generation: number; message: ChatMessage }
   | { type: "chat_failed"; conversationId: number; generation: number; kind: ErrorKind; message: string }
+  | { type: "repo_state"; projectId: number; state: RepoState }
+  | { type: "git_output"; projectId: number; text: string; error: boolean }
+  | { type: "cmd_output"; projectId: number; runId: number; stream: string; text: string }
+  | { type: "cmd_exit"; projectId: number; runId: number; code: number }
   | { type: "chat_researching"; conversationId: number; generation: number; objective: string }
   | { type: "chat_agent_message"; conversationId: number; generation: number; message: ChatMessage }
   | { type: "chat_title"; conversationId: number; title: string }
@@ -258,4 +262,162 @@ export interface DocContent {
   modified: number;
   content: string;
   truncated: boolean;
+}
+
+// ---------------------------------------------------------------- Repo tab (files and Git)
+export interface FsEntry {
+  name: string;
+  rel: string;
+  isDir: boolean;
+  size: number;
+  hidden: boolean;
+  ignored: boolean;
+  link: boolean;
+}
+export interface FileData {
+  rel: string;
+  content: string;
+  mtime: number;
+  size: number;
+  large: boolean;
+  crlf: boolean;
+}
+export interface WriteResult {
+  saved: boolean;
+  mtime: number;
+  conflict: boolean;
+}
+export interface FileEntry {
+  path: string;
+  orig: string | null;
+  index: string;
+  worktree: string;
+  kind: "modified" | "added" | "deleted" | "renamed" | "conflicted" | "untracked" | string;
+}
+export interface BranchState {
+  head: string;
+  oid: string;
+  detached: boolean;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+}
+export interface RepoState {
+  isRepo: boolean;
+  root: string;
+  branch: BranchState;
+  entries: FileEntry[];
+  staged: number;
+  modified: number;
+  untracked: number;
+  conflicted: number;
+  clean: boolean;
+  operation: "merge" | "rebase" | "cherry-pick" | "revert" | null;
+  lastFetchMs: number | null;
+  historyToken: string;
+  error: string | null;
+}
+export interface BranchInfo {
+  name: string;
+  isRemote: boolean;
+  current: boolean;
+  oid: string;
+  upstream: string | null;
+  track: string;
+  subject: string;
+}
+export interface LaneRef {
+  lane: number;
+  color: number;
+}
+export interface RefLabel {
+  name: string;
+  kind: "head" | "local" | "remote" | "tag";
+  current: boolean;
+}
+export interface GraphRow {
+  hash: string;
+  short: string;
+  parents: string[];
+  author: string;
+  time: number;
+  subject: string;
+  refs: RefLabel[];
+  lane: number;
+  color: number;
+  through: LaneRef[];
+  incoming: LaneRef[];
+  outgoing: LaneRef[];
+  isMerge: boolean;
+  isHead: boolean;
+}
+export interface Graph {
+  rows: GraphRow[];
+  maxLanes: number;
+  truncated: boolean;
+}
+export interface ChangedFile {
+  status: string;
+  path: string;
+  orig: string | null;
+}
+export interface CommitDetail {
+  hash: string;
+  short: string;
+  parents: string[];
+  author: string;
+  email: string;
+  time: number;
+  subject: string;
+  body: string;
+  refs: RefLabel[];
+  files: ChangedFile[];
+}
+export interface Remote {
+  name: string;
+  fetch: string;
+  push: string;
+}
+export interface TagInfo {
+  name: string;
+  oid: string;
+  subject: string;
+  time: number;
+  annotated: boolean;
+}
+export interface StashInfo {
+  index: number;
+  name: string;
+  subject: string;
+  time: number;
+}
+export interface ConflictView {
+  path: string;
+  ours: string;
+  theirs: string;
+  base: string;
+}
+export interface PushPreview {
+  remote: string;
+  branch: string;
+  upstream: string | null;
+  commits: string[];
+  remotes: string[];
+  detached: boolean;
+}
+export interface OpResult {
+  ok: boolean;
+  label: string;
+  summary: string;
+  output: string;
+  conflicts: boolean;
+}
+export type DiffSpec = { kind: "unstaged"; path: string } | { kind: "staged"; path: string } | { kind: "commit"; hash: string; path: string | null };
+export type GitOp = { op: string } & Record<string, unknown>;
+export interface OutputLine {
+  id: number;
+  source: "git" | "cmd" | "info";
+  runId?: number;
+  stream: "out" | "err" | "info";
+  text: string;
 }

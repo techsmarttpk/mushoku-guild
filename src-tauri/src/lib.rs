@@ -11,6 +11,9 @@ mod commands;
 mod db;
 mod events;
 mod project_context;
+mod fsops;
+mod git;
+mod repo_cmds;
 mod secrets;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,6 +68,7 @@ pub fn run() {
                     }
                 }
             });
+            repo_cmds::start_hub(app.handle().clone(), state.hub.clone());
             app.manage(state);
             Ok(())
         })
@@ -126,6 +130,31 @@ pub fn run() {
             commands::service_open,
             commands::service_stop,
             commands::service_focus,
+            repo_cmds::git_watch,
+            repo_cmds::git_state,
+            repo_cmds::git_branches,
+            repo_cmds::git_graph,
+            repo_cmds::git_commit_detail,
+            repo_cmds::git_diff,
+            repo_cmds::git_remotes,
+            repo_cmds::git_tags,
+            repo_cmds::git_stashes,
+            repo_cmds::git_conflict,
+            repo_cmds::git_push_preview,
+            repo_cmds::git_sync_sentence,
+            repo_cmds::git_op,
+            repo_cmds::git_cancel,
+            repo_cmds::fs_list,
+            repo_cmds::fs_read,
+            repo_cmds::fs_write,
+            repo_cmds::fs_create,
+            repo_cmds::fs_rename,
+            repo_cmds::fs_delete,
+            repo_cmds::fs_stat,
+            repo_cmds::workspace_get,
+            repo_cmds::workspace_save,
+            repo_cmds::cmd_run,
+            repo_cmds::cmd_cancel,
             commands::permission_decide
         ])
         .build(tauri::generate_context!())
@@ -135,6 +164,7 @@ pub fn run() {
             if let Some(state) = handle.try_state::<commands::AppState>() {
                 state.runner.shutdown(); // nothing may outlive the app
                 state.services.stop_all();
+                state.cmds.stop_all();
             }
         }
     });

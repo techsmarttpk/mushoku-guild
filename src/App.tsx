@@ -12,12 +12,15 @@ import { BrowserCard, PermissionsCard, RepoTag, ServicesPanel } from "./ui/Extra
 import { LibraryReader } from "./ui/Library.tsx";
 import { ActivityFeed, ErrorNote, GuildPanel, NewTask, PermissionDialog, TaskView } from "./ui/panels.tsx";
 import { QuestHistory } from "./ui/Quests.tsx";
+import { ConfirmDialog } from "./ui/repo/common.tsx";
+import { RepoWorkspace } from "./ui/repo/RepoWorkspace.tsx";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /** One greeting per application launch; React re-renders and effect re-runs cannot repeat it. */
 const welcomeGate = createWelcomeGate();
 
-type Tab = "quest" | "chat" | "library" | "guild";
-const TAB_LABEL: Record<Tab, string> = { quest: "Quests", chat: "Chat", library: "Library", guild: "Guild" };
+type Tab = "quest" | "chat" | "library" | "repo" | "guild";
+const TAB_LABEL: Record<Tab, string> = { quest: "Quests", chat: "Chat", library: "Library", repo: "Repo", guild: "Guild" };
 
 export function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
@@ -46,6 +49,14 @@ export function App() {
   const sceneRef = useRef<CafeScene | null>(null);
   const libRef = useRef<LibraryScene | null>(null);
   const minimized = useRef(false);
+  const tabRef = useRef<Tab>("guild");
+  tabRef.current = tab;
+  const syncRef = useRef<() => void>(() => undefined);
+  const [dirtyCount, setDirtyCount] = useState(0);
+  const dirtyRef = useRef(0);
+  dirtyRef.current = dirtyCount;
+  const [pendingSwitch, setPendingSwitch] = useState<null | (() => void)>(null);
+  const [closeWarn, setCloseWarn] = useState(false);
 
   const project = useMemo(() => state.projects.find((p) => p.id === state.currentProjectId) ?? null, [state.projects, state.currentProjectId]);
   const pid = state.currentProjectId;
@@ -173,6 +184,25 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.prefs, state.selectedTaskId]);
 
+  // closing the window with unsaved editor changes asks first
+  useEffect(() => {
+    let off: (() => void) | null = null;
+    let cancelled = false;
+    void getCurrentWindow()
+      .onCloseRequested((ev) => {
+        if (dirtyRef.current > 0) {
+          ev.preventDefault();
+          setCloseWarn(true);
+        }
+      })
+      .then((u) => (cancelled ? u() : (off = u)))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, []);
+
   // ---------------------------------------------------------------- café scene
   useEffect(() => {
     const host = hostRef.current;
@@ -181,7 +211,8 @@ export function App() {
     sceneRef.current = scene;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    const sync = (): void => scene.setPaused(document.hidden || minimized.current);
+    const sync = (): void => scene.setPaused(document.hidden || minimized.current || tabRef.current === "repo");
+    syncRef.current = sync;
     document.addEventListener("visibilitychange", sync);
     void (async () => {
       await scene.init(host);
@@ -202,6 +233,10 @@ export function App() {
       sceneRef.current = null;
     };
   }, []);
+  useEffect(() => {
+    syncRef.current();
+  }, [tab]);
+
   const sceneState = useMemo(
     () => projectScene({ status, streaming: state.streaming, permissionPending: state.permissions.length > 0, currentTool: state.currentTool, researching: state.research?.status === "researching" || state.chatResearching !== null, chatting: state.chatStreaming }),
     [status, state.streaming, state.permissions.length, state.currentTool, state.research?.status, state.chatStreaming, state.chatResearching],
@@ -471,6 +506,7 @@ export function App() {
   }, [pid, state.research?.status]);
 
   // ---------------------------------------------------------------- projects, settings, browser
+  const guard = (fn: () => void): void => (dirtyRef.current > 0 ? setPendingSwitch(() => fn) : fn());
   const switchProject = (p: Project | null) =>
     run("project", async () => {
       if (p) await api.projectSelect(p.id);
@@ -505,6 +541,10 @@ export function App() {
   const permissionsNode = (
     <PermissionsCard project={project} prefs={state.prefs} policy={policy} autopilot={autopilotChoice} onPolicy={setPolicy} onAutopilot={setAutopilotChoice} onTrust={() => void trust()} onRevoke={() => void revoke()} onRelink={() => void relink()} busy={busy === "trust"} />
   );
+  const claudeLines = useMemo(
+    () => state.activity.filter((a) => ["tool_use", "tool_result", "tool_error", "permission_auto", "permission_decision", "result", "error", "cancelled", "init"].includes(a.kind)).slice(-300).map((a) => `${a.title}${a.detail ? ` — ${a.detail.split("\n")[0]?.slice(0, 160)}` : ""}`),
+    [state.activity],
+  );
   const hoveredDoc = libHover >= 0 ? (libDocs[libHover] ?? null) : null;
   const questOpen = state.detail !== null;
 
@@ -524,7 +564,7 @@ export function App() {
           <span className={`chip ${state.chatgpt.connected ? "ok" : ""}`}>ChatGPT {state.chatgpt.connected ? "●" : "○"}</span>
           <span className={`chip ${claudeReady ? "ok" : ""}`}>Claude {claudeReady ? "●" : "○"}</span>
           {state.projects.length > 0 ? (
-            <select className="repo-select" aria-label="Active repository" value={pid ?? ""} onChange={(e) => void switchProject(state.projects.find((p) => p.id === Number(e.target.value)) ?? null)}>
+            <select className="repo-select" aria-label="Active repository" value={pid ?? ""} onChange={(e) => { const p = state.projects.find((x) => x.id === Number(e.target.value)) ?? null; guard(() => void switchProject(p)); }}>
               {state.projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   ⌂ {p.name}
@@ -537,7 +577,7 @@ export function App() {
         </div>
       </header>
 
-      <main className="cols">
+      <main className={`cols ${tab === "repo" ? "repo-mode" : ""}`}>
         <section className="left">
           <div className="cafe-slot" ref={wrapRef}>
             <div className="cafe" style={{ "--w": `${Math.round(SCENE_W * scale)}px`, "--h": `${Math.round(SCENE_H * scale)}px` } as React.CSSProperties}>
@@ -565,7 +605,7 @@ export function App() {
           </div>
         </section>
 
-        <section className={`right panel ${tab === "chat" ? "wide" : ""}`}>
+        <section className={`right panel ${tab === "chat" ? "wide" : ""} ${tab === "repo" ? "repo-full" : ""}`}>
           {state.dbNote && <div className="note">{state.dbNote}</div>}
           {tab === "guild" && (
             <GuildPanel
@@ -617,8 +657,8 @@ export function App() {
                 })
               }
               onRefreshContext={() => void loadContext(pid, true)}
-              onPickProject={() => void pickProject()}
-              onSelectProject={(p) => void switchProject(p)}
+              onPickProject={() => guard(() => void pickProject())}
+              onSelectProject={(p) => guard(() => void switchProject(p))}
               extra={
                 <>
                   <BrowserCard
@@ -734,6 +774,23 @@ export function App() {
             />
           )}
 
+          {tab === "repo" &&
+            (project ? (
+              <RepoWorkspace
+                key={project.id}
+                project={project}
+                repo={state.repo}
+                output={state.output}
+                claudeLines={claudeLines}
+                trusted={trusted}
+                onRepoState={(rs) => dispatch({ type: "event", event: { type: "repo_state", projectId: project.id, state: rs } })}
+                onClearOutput={() => dispatch({ type: "patch", patch: { output: [] } })}
+                onDirtyCount={setDirtyCount}
+              />
+            ) : (
+              <div className="note">Connect a project folder in the Guild tab first. The Repo tab works on the active repository.</div>
+            ))}
+
           {tab === "library" && (
             <LibraryReader
               project={project}
@@ -756,6 +813,31 @@ export function App() {
         </section>
       </main>
 
+      {pendingSwitch && (
+        <ConfirmDialog
+          title="Unsaved changes in the editor"
+          danger
+          confirm="Switch and discard the changes"
+          message={<p>{dirtyCount} open file{dirtyCount === 1 ? " has" : "s have"} unsaved edits in the Repo tab. Go back and save them first, or discard them.</p>}
+          onCancel={() => setPendingSwitch(null)}
+          onConfirm={() => {
+            const f = pendingSwitch;
+            setPendingSwitch(null);
+            setDirtyCount(0);
+            f();
+          }}
+        />
+      )}
+      {closeWarn && (
+        <ConfirmDialog
+          title="Quit with unsaved changes?"
+          danger
+          confirm="Discard changes and quit"
+          message={<p>{dirtyCount} file{dirtyCount === 1 ? " has" : "s have"} unsaved edits in the Repo tab.</p>}
+          onCancel={() => setCloseWarn(false)}
+          onConfirm={() => void getCurrentWindow().destroy()}
+        />
+      )}
       {permission && <PermissionDialog request={permission} onDecide={(allow) => void api.permissionDecide(permission.requestId, allow).catch(fail)} />}
     </div>
   );

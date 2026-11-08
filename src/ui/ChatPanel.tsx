@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { highlight } from "../domain/highlight.ts";
-import { parseMarkdown, type Block, type Inline } from "../domain/markdown.ts";
+import { isMermaid, parseMarkdown, type Block, type Inline } from "../domain/markdown.ts";
+import { MermaidBoundary } from "./Mermaid.tsx";
 import type { UiState } from "../domain/store.ts";
 import type { ChatMessage, ConvSummary, Project, ResearchView } from "../domain/types.ts";
 import { RepoTag } from "./Extras.tsx";
@@ -31,6 +32,7 @@ function BlockView({ b }: { b: Block }) {
     case "p":
       return <p><Inlines items={b.inline} /></p>;
     case "code":
+      if (isMermaid(b.lang)) return <MermaidBoundary source={b.text} />;
       return (
         <pre className="code md-code" data-lang={b.lang || undefined}>
           {highlight(b.text, b.lang).map((t, i) => (t.t === "txt" ? <Fragment key={i}>{t.s}</Fragment> : <span key={i} className={`tok-${t.t}`}>{t.s}</span>))}

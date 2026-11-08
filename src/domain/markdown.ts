@@ -103,3 +103,6 @@ export function parseMarkdown(src: string): Block[] {
   flush();
   return blocks;
 }
+
+/** Only a fence tagged exactly `mermaid` is a diagram; every other fence stays a code block. */
+export const isMermaid = (lang: string): boolean => lang.trim().toLowerCase() === "mermaid";

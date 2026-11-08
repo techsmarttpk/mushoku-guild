@@ -10,6 +10,8 @@ import type {
   QuestRow,
   ServiceView,
   PrefsView,
+  OutputLine,
+  RepoState,
   ResearchView,
   ClaudeInfo,
   ContextInfo,
@@ -60,6 +62,9 @@ export interface UiState {
   quests: QuestRow[];
   services: ServiceView[];
   prefs: PrefsView | null;
+  /** The authoritative Git state, pushed by the backend (never computed in the UI). */
+  repo: RepoState | null;
+  output: OutputLine[];
   chatMessages: ChatMessage[];
   chatStream: string;
   chatGeneration: number;
@@ -99,6 +104,8 @@ export const initialState: UiState = {
   quests: [],
   services: [],
   prefs: null,
+  repo: null,
+  output: [],
   chatMessages: [],
   chatStream: "",
   chatGeneration: 0,
@@ -127,6 +134,14 @@ function withStatus(tasks: Task[], detail: TaskDetail | null, taskId: number, st
     tasks: tasks.map((t) => (t.id === taskId ? { ...t, status } : t)),
     detail: detail && detail.task.id === taskId ? { ...detail, task: { ...detail.task, status } } : detail,
   };
+}
+
+const MAX_OUTPUT = 1500;
+let outputSeq = 0;
+/** Bounded output history: the newest lines win. */
+export function pushOutput(list: OutputLine[], line: Omit<OutputLine, "id">): OutputLine[] {
+  const next = [...list, { ...line, id: ++outputSeq }];
+  return next.length > MAX_OUTPUT ? next.slice(next.length - MAX_OUTPUT) : next;
 }
 
 /** Appends a message unless its id is already there (events can repeat); replaces an optimistic local copy. */
@@ -175,6 +190,8 @@ export function reduce(s: UiState, a: Action): UiState {
         quests: [],
         services: [],
         prefs: null,
+        repo: null,
+        output: [],
         context: null,
         conversation: null,
         convs: [],
@@ -265,6 +282,14 @@ function reduceEvent(s: UiState, e: AppEvent): UiState {
       return e.conversationId === s.conversation?.id ? { ...s, chatResearching: e.objective, chatStream: "" } : s;
     case "chat_title":
       return { ...s, convs: s.convs.map((c) => (c.id === e.conversationId ? { ...c, title: e.title } : c)), conversation: s.conversation?.id === e.conversationId ? { ...s.conversation, title: e.title } : s.conversation };
+    case "repo_state":
+      return e.projectId === s.currentProjectId ? { ...s, repo: e.state } : s;
+    case "git_output":
+      return e.projectId === s.currentProjectId ? { ...s, output: pushOutput(s.output, { source: "git", stream: e.error ? "err" : "out", text: e.text }) } : s;
+    case "cmd_output":
+      return e.projectId === s.currentProjectId ? { ...s, output: pushOutput(s.output, { source: "cmd", runId: e.runId, stream: e.stream === "err" ? "err" : e.stream === "info" ? "info" : "out", text: e.text }) } : s;
+    case "cmd_exit":
+      return e.projectId === s.currentProjectId ? { ...s, output: pushOutput(s.output, { source: "cmd", runId: e.runId, stream: e.code === 0 ? "info" : "err", text: `[exit code ${e.code}]` }) } : s;
     case "service_found":
       return e.taskId === s.selectedTaskId && !s.services.some((x) => x.id === e.service.id) ? { ...s, services: [...s.services, { ...e.service, live: true }] } : s;
     case "chat_failed":

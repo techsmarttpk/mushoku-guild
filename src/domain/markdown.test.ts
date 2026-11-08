@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseInline, parseMarkdown } from "./markdown.ts";
+import { isMermaid, parseInline, parseMarkdown } from "./markdown.ts";
 
 test("code fences keep their content verbatim, including markdown-looking text and unterminated fences", () => {
   const b = parseMarkdown("Intro\n\n```ts\nconst a = **1**;\n# not a heading\n```\nafter");
@@ -30,4 +30,14 @@ test("tables become structured data with their header and rows", () => {
   assert.equal(t.head.length, 2);
   assert.equal(t.rows.length, 2);
   assert.equal(parseMarkdown("a | b\nnot a table").some((x) => x.k === "table"), false);
+});
+
+test("only mermaid fences are diagrams; ordinary and lookalike fences stay code", () => {
+  const doc = ["```mermaid", "flowchart TD", "  A[Start] --> B[Process]", "```", "", "```js", "const x = 1;", "```", "", "```mermaid-not", "x", "```", "", "```", "plain", "```", "", "```Mermaid", "sequenceDiagram", "  A->>B: hi", "```"].join("\n");
+  const blocks = parseMarkdown(doc);
+  const codes = blocks.filter((b): b is Extract<typeof b, { k: "code" }> => b.k === "code");
+  assert.equal(codes.length, 5);
+  assert.deepEqual(codes.map((c) => isMermaid(c.lang)), [true, false, false, false, true]);
+  assert.match(codes[0]?.text ?? "", /A\[Start\] --> B\[Process\]/, "diagram source is preserved exactly");
+  assert.equal(codes.filter((c) => isMermaid(c.lang)).length, 2, "several diagrams in one document are all found");
 });

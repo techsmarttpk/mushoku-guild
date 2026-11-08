@@ -952,3 +952,768 @@ details > summary {
   max-width: 200px;
   padding: 1px 6px;
 }
+
+.mermaid-block {
+  margin: 8px 0;
+  border: 3px solid var(--wood-l);
+  background: #f5e6c4;
+  color: #3a2417;
+}
+.mermaid-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 2px 8px;
+  background: #e3cb9f;
+  border-bottom: 2px solid #b79a62;
+}
+.mermaid-bar .link {
+  color: #5c3a22;
+}
+.mermaid-view {
+  overflow: auto;
+  max-height: 460px;
+  padding: 8px;
+}
+.mermaid-svg svg {
+  display: block;
+  max-width: none;
+  height: auto;
+}
+.mermaid-err {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+}
+
+/* ---------------------------------------------------------------- Repo tab */
+.cols.repo-mode {
+  grid-template-columns: minmax(0, 1fr);
+}
+.cols.repo-mode .left {
+  display: none;
+}
+.right.repo-full {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.repo {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 18px;
+}
+.repo-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--wood-d);
+  border-bottom: 3px solid var(--wood-l);
+}
+.repo-top .repo-tag {
+  margin-top: 3px;
+}
+.gitbar {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.gitbar .btn {
+  padding: 2px 10px;
+}
+.grow {
+  flex: 1;
+}
+.branch-wrap {
+  position: relative;
+}
+.branch-btn {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px;
+  color: #fff;
+  background: #2c7a77;
+  border: 3px solid var(--teal);
+  cursor: pointer;
+  font-size: 21px;
+}
+.branch-btn:hover {
+  background: #36918d;
+}
+.branch-name {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ab-up {
+  color: #bff0c2;
+}
+.ab-down {
+  color: #ffd0a0;
+}
+.commit-hash {
+  color: var(--cream-d);
+  font-size: 13px;
+}
+.chip-btn {
+  font: inherit;
+  border: 2px solid var(--wood-l);
+  background: var(--wood);
+  color: var(--cream);
+  padding: 0 8px;
+  cursor: pointer;
+}
+.chip-btn.ok {
+  color: var(--green);
+}
+.chip-btn.dirty {
+  color: var(--gold);
+  border-color: var(--gold);
+}
+.sync {
+  font-size: 17px;
+}
+.sync-ok {
+  color: var(--green);
+}
+.sync-warn {
+  color: var(--gold);
+}
+.sync-info {
+  color: var(--cream-d);
+}
+.busy-note {
+  color: var(--teal);
+}
+.gitstatus {
+  flex-basis: 100%;
+  color: var(--green);
+}
+.gitstatus.err {
+  color: var(--red);
+}
+.op-banner {
+  flex-basis: 100%;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  border: 3px solid var(--gold);
+  background: #4a3a1a;
+}
+.branch-pop {
+  position: absolute;
+  z-index: 8;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  width: 340px;
+  background: var(--wood);
+  border: 4px solid var(--gold);
+  box-shadow: 0 0 0 3px var(--ink), 6px 6px 0 3px var(--ink);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.branch-scroll {
+  max-height: 300px;
+  overflow-y: auto;
+}
+.branch-scroll ul,
+.repo ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.branch-head {
+  color: var(--gold);
+  margin-top: 4px;
+}
+.branch-item {
+  font: inherit;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 6px;
+  color: var(--cream);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.branch-item:hover {
+  background: var(--wood-l);
+}
+.branch-item.cur {
+  color: var(--teal);
+}
+.menu {
+  position: relative;
+  display: inline-block;
+}
+.menu-list {
+  position: absolute;
+  z-index: 9;
+  top: 100%;
+  left: 0;
+  min-width: 220px;
+  margin: 3px 0 0;
+  padding: 3px;
+  background: var(--wood);
+  border: 3px solid var(--edge-l);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.menu-list.right {
+  left: auto;
+  right: 0;
+}
+.menu-list button {
+  font: inherit;
+  width: 100%;
+  text-align: left;
+  padding: 3px 8px;
+  color: var(--cream);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.menu-list button:hover:not(:disabled) {
+  background: var(--wood-l);
+}
+.menu-list button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.menu-list button.danger {
+  color: var(--red);
+}
+.menu-sep {
+  border-top: 2px solid var(--wood-l);
+  margin: 3px 0;
+}
+.ib {
+  font: inherit;
+  background: none;
+  border: 2px solid transparent;
+  color: var(--cream);
+  cursor: pointer;
+  padding: 0 5px;
+  line-height: 1.1;
+}
+.ib:hover:not(:disabled) {
+  border-color: var(--edge);
+  background: var(--wood-l);
+}
+.ib:disabled {
+  opacity: 0.35;
+}
+.repo-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+}
+.repo-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--wood-d);
+}
+.side-tabs {
+  display: flex;
+  border-bottom: 3px solid var(--wood-l);
+}
+.stab {
+  font: inherit;
+  flex: 1;
+  padding: 3px 4px;
+  color: var(--cream-d);
+  background: var(--wood);
+  border: 0;
+  border-right: 2px solid var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.stab.on {
+  color: var(--ink);
+  background: var(--gold);
+}
+.side-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.splitter {
+  cursor: col-resize;
+  background: var(--wood-l);
+}
+.splitter:hover {
+  background: var(--gold);
+}
+.explorer-bar {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-bottom: 2px solid var(--wood-l);
+}
+.explorer-opts {
+  display: flex;
+  gap: 12px;
+  padding: 2px 8px;
+  font-size: 16px;
+  color: var(--cream-d);
+}
+.explorer-opts input {
+  width: auto;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+.tree-row:hover {
+  background: var(--wood);
+}
+.tree-row.sel {
+  background: var(--wood-l);
+}
+.tree-row.active .tree-name {
+  color: var(--gold);
+}
+.tree-row.ignored {
+  opacity: 0.55;
+}
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.tree-icon {
+  width: 20px;
+  text-align: center;
+  font-size: 15px;
+}
+.gl {
+  font-size: 15px;
+  min-width: 14px;
+  text-align: center;
+}
+.gl-modified {
+  color: var(--gold);
+}
+.gl-added,
+.gl-untracked {
+  color: var(--green);
+}
+.gl-deleted,
+.gl-conflicted {
+  color: var(--red);
+}
+.gl-renamed {
+  color: var(--teal);
+}
+.gl-dot {
+  color: var(--gold);
+  font-size: 10px;
+}
+.repo-center {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.center-tabs {
+  display: flex;
+  align-items: stretch;
+  background: var(--wood-d);
+  border-bottom: 3px solid var(--wood-l);
+}
+.etabs {
+  flex: 1;
+  display: flex;
+  overflow-x: auto;
+  min-width: 0;
+}
+.etab {
+  display: flex;
+  align-items: center;
+  border-right: 2px solid var(--ink);
+  background: var(--wood);
+  white-space: nowrap;
+}
+.etab.on {
+  background: #1b110b;
+  box-shadow: inset 0 -3px 0 var(--gold);
+}
+.etab-name,
+.etab-x {
+  font: inherit;
+  background: none;
+  border: 0;
+  color: var(--cream);
+  cursor: pointer;
+  padding: 3px 8px;
+}
+.etab-x {
+  padding: 3px 6px;
+  color: var(--cream-d);
+}
+.dirty-dot {
+  color: var(--gold);
+}
+.ext-flag {
+  color: var(--red);
+}
+.center-switch {
+  display: flex;
+}
+.seg {
+  font: inherit;
+  padding: 3px 12px;
+  background: var(--wood);
+  color: var(--cream-d);
+  border: 0;
+  border-left: 2px solid var(--ink);
+  cursor: pointer;
+}
+.seg.on {
+  background: var(--teal);
+  color: #062a29;
+}
+.editor-bar,
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 8px;
+  background: var(--wood-d);
+  color: var(--cream-d);
+  font-size: 16px;
+}
+.editor-bar .btn {
+  padding: 0 8px;
+}
+.editor-bar input {
+  width: auto;
+}
+.statusbar {
+  border-top: 2px solid var(--wood-l);
+}
+.ext-banner {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  background: #4a1d1b;
+  border-bottom: 3px solid var(--red);
+}
+.center-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.editor-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.editor-host {
+  position: absolute;
+  inset: 0;
+}
+.editor-host .cm-editor {
+  height: 100%;
+}
+.editor-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.repo-out {
+  display: flex;
+  flex-direction: column;
+  border-top: 3px solid var(--edge);
+  background: var(--wood-d);
+  min-height: 28px;
+}
+.out-handle {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  cursor: row-resize;
+  flex: none;
+}
+.output {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.output-tabs {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 0 8px;
+}
+.otab {
+  font: inherit;
+  background: none;
+  border: 0;
+  color: var(--cream-d);
+  cursor: pointer;
+  padding: 0 8px;
+  border-bottom: 3px solid transparent;
+}
+.otab.on {
+  color: var(--cream);
+  border-bottom-color: var(--gold);
+}
+.cmd-form {
+  display: flex;
+  gap: 6px;
+  padding: 2px 8px;
+  align-items: center;
+}
+.cmd-form .btn {
+  padding: 0 8px;
+}
+.output-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 8px;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ol-err {
+  color: var(--red);
+}
+.ol-info {
+  color: var(--teal);
+}
+.changes,
+.gitside {
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.changes h4,
+.gitside h4 {
+  margin: 4px 0;
+  font-size: 9px;
+}
+.sec-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.change-row,
+.side-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.change-name {
+  font: inherit;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: var(--cream);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 2px;
+}
+.change-name:hover {
+  background: var(--wood);
+}
+.side-row > span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.side-row small {
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.side-row .cur {
+  color: var(--teal);
+}
+.commit-box textarea {
+  font-size: 16px;
+}
+.diff {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.diff-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 8px;
+  background: var(--wood-d);
+}
+.diff-body {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 4px 8px;
+  background: #1b110b;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.diff-body span {
+  display: block;
+  white-space: pre;
+}
+.d-add {
+  background: #1d3a22;
+  color: #b8f0b8;
+}
+.d-del {
+  background: #45201f;
+  color: #f4b8b3;
+}
+.d-hunk {
+  color: var(--teal);
+}
+.d-meta {
+  color: var(--cream-d);
+}
+.graph-wrap {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr);
+}
+.graph-list {
+  overflow: auto;
+  border-right: 3px solid var(--wood-l);
+}
+.graph-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  padding-right: 8px;
+}
+.graph-row:hover {
+  background: var(--wood);
+}
+.graph-row.sel {
+  background: var(--wood-l);
+}
+.graph-svg {
+  flex: none;
+}
+.graph-msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.graph-meta {
+  color: var(--cream-d);
+  font-size: 15px;
+  flex: none;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ref {
+  display: inline-block;
+  font-size: 14px;
+  padding: 0 5px;
+  margin-right: 5px;
+  border: 2px solid var(--edge);
+  background: var(--wood-d);
+}
+.ref-head {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+.ref-local {
+  border-color: var(--green);
+  color: var(--green);
+}
+.ref-remote {
+  border-color: #6fa8e8;
+  color: #6fa8e8;
+}
+.ref-tag {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+.graph-detail {
+  overflow: auto;
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.commit-body {
+  background: var(--wood-d);
+  padding: 4px 6px;
+}
+.refs {
+  display: flex;
+  flex-wrap: wrap;
+}
+.dialog.wide {
+  width: min(1100px, 94vw);
+}
+.conflict-cols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.conflict-title {
+  color: var(--gold);
+}
+.conflict-pane {
+  max-height: 320px;
+}
+.push-commits {
+  max-height: 140px;
+  overflow: auto;
+  background: var(--ink);
+  padding: 4px 6px;
+}

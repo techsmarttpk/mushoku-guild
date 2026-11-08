@@ -390,3 +390,11 @@ Facts future sessions must not rediscover. Evidence and numbers: `docs/architect
 - A finished Claude quest can leave dev servers running inside the quest's Job Object; they are services of the quest, not part of its execution state.
 - The plan-usage Responses endpoint is used with a text protocol for agent hand-off instead of function tools (not verified to be supported).
 - Open: Auto Pilot classifier is a denylist, not a sandbox; browser actions were verified only for availability and flag passing unless noted in `docs/plan.md`.
+
+## 20. Cycle 4 learned facts (2026-11-08)
+- Mermaid 12 works under the strict CSP (script-src 'self', style-src 'unsafe-inline') with `securityLevel: strict` and lazy loading; each diagram type loads its own chunk.
+- On Windows with `core.autocrlf` Git rewrites LF to CRLF in the working tree: tests that read files back must normalise line endings, and the editor keeps a file's original EOL when saving.
+- Git's first stderr line is often a progress line ("From ..."); the reason is the last `fatal:`/`error:` line.
+- `git check-ignore -z --stdin` answers per directory listing and is cheap enough to use for the explorer; exit code 1 means "nothing ignored", 128 means "not a repository".
+- A quest changing branches/commits is picked up by the 3 s poll plus an immediate refresh when the quest ends; verified with a real Claude run.
+- Open: no OS file-watcher (polling only), no interactive terminal, no three-way merge editor.

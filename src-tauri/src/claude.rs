@@ -953,6 +953,7 @@ fn finish_run(ctx: &RunCtx, resolved: &Resolved, was_cancelled: bool, stderr_tai
     };
     let exit = resolved.exit_code.map(|c| format!("exit code {c}")).unwrap_or_else(|| "exit code unknown".into());
     let detail = format!("{}{}", note.as_deref().or(result_text.as_deref()).map(|t| truncate(t, 1500)).unwrap_or_default(), if resolved.forced { format!("\n({exit}; the process had to be stopped after finishing)") } else { format!("\n({exit})") });
+    crate::repo_cmds::kick(); // files and Git history may have changed: refresh the Repo tab
     ctx.push(if status == "completed" { "result" } else if status == "cancelled" { "cancelled" } else { "error" }, title, detail.trim());
     match ctx.kind {
         RunKind::Quest { task_id, exec_id } => {
