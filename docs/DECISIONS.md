@@ -78,7 +78,7 @@ Template:
 - **Alternatives considered:** Electron (bundles Chromium, contradicts the lightweight goal); .NET WPF/WinUI + SkiaSharp (possibly lighter and Windows-only; the named fallback); Rust-native egui/iced/Slint (weaker for sprite scenes); Godot or other engines (ruled out by the user); Qt/QML (licensing and tooling weight); Preact/Solid/Svelte instead of React (marginal gain, not chosen).
 - **Consequences:** Rust and MSVC build tools must be installed; Rust skills are required for the core; the product is Windows-first; Tauri's security model must be configured deliberately (minimal capabilities, strict CSP); `CLAUDE.md` names the stack; Phase 2 starts with a skeleton and a measurement step.
 - **Verification and revisit rule:** The Phase 2 measurement gate (`docs/plan.md` task 2.6) verifies the assumptions behind this decision (WebView2 footprint, hidden-window behaviour, Pixi idle behaviour). The stack is accepted; if the evidence shows it cannot meet the targets in ADR-0012 or compromises stability or security, the evidence must be documented and a revision (including the .NET + Skia fallback) proposed to the user. This ADR is changed only by a new, user-approved ADR that supersedes it.
-- **Known risks (unchanged):** WebView2 memory unmeasured; hidden-window suspension unverified in Tauri; PixiJS AnimatedSprite and render-on-demand unverified from docs; hybrid-GPU behaviour unverified.
+- **Known risks (updated after the Phase 2 gate, `docs/architecture.md` §13):** WebView2 memory measured (84 MB private for a blank page, 90–96 MB for the scene; the summed working set metric is misleading); WebView2 does not report minimise/hide to the page (worked around with a Rust event); Pixi's internal system ticker and any `requestAnimationFrame` loop cost about 1.7% CPU (handled in the scene controller); AnimatedSprite stepping and render-on-demand verified; discrete GPU used by default (utilisation about 0%). Still open: memory growth over hours, `TrySuspend` benefit, real-world numbers with providers and SQLite.
 
 ## ADR-0011: MVP scope
 - **Date:** 2026-11-08 (proposed and accepted the same day)
@@ -98,6 +98,7 @@ Template:
   3. **Unrealistic targets are revised with evidence.** If measurement shows a target is unrealistic, document the evidence (method, numbers, environment) and propose a revised target to the user; targets change only through a recorded, user-approved amendment to this ADR.
   4. **Claude CLI consumption is measured separately.** `claude.exe` and its child processes are the user's tool and are reported separately from Mushoku Guild's own usage; budgets apply to Mushoku Guild only. Combined figures may be reported for information but are not budget inputs.
 - **Alternatives considered:** No numeric budgets (rejected: the requirement says measurable); tighter numbers copied from other apps (rejected: no baseline for this stack); including `claude.exe` in the budget (rejected: it dominates the total and is outside the app's control).
+- **Phase 2 gate result (2026-11-08):** measured; RAM as literally defined fails, everything else measured passes. Evidence and the proposed amendment A: `docs/architecture.md` §13 and the entry under "Proposed" below. **No change to this ADR has been made.**
 - **Consequences:** The Phase 2 gate produces the first real measurements; performance regressions become test failures only for metrics with recorded baselines; the "lite" mode is a first-class feature.
 
 ---
@@ -129,6 +130,19 @@ Nothing below is accepted (ADR-0007, ADR-0008 and ADR-0009 remain open). Each ne
 - **Proposed decision:** Two provider roles (Reasoner for prompt engineering, Executor for task execution), a separate auth interface, a shared error taxonomy, and a registry, so new providers (for example DeepSeek) are adapters only.
 - **Alternatives considered:** One universal "Agent" interface (the earlier sketch), which mixes streaming chat with long-running tool-using jobs and forces a lowest-common-denominator design.
 - **Accept when:** The user reviews it and it is validated against both real adapters in Phase 3.
+
+### ADR-0012 amendment A (PROPOSED — not accepted; needs the user's decision)
+- **Date proposed:** 2026-11-08 (Phase 2 measurement gate, `docs/architecture.md` §13)
+- **Context:** ADR-0012 asks to document evidence and propose a revised target when a target proves unrealistic. The gate measured the RAM targets as literally defined (sum of working sets of the process tree) at 371 MB idle and 377 MB active, against 180/260 MB targets and 250/350 MB limits. A **blank** Tauri + WebView2 page, with no Pixi at all, already sums to 355 MB, because the seven WebView2 processes share most of their pages. By **private** working set the same measurements are 84 MB (blank), 90 MB (idle) and 96 MB (active). So the targets cannot be met by any application on this stack with this metric, while the actual memory the app adds is small.
+- **Proposed change (measurements are on one machine, three runs per state):**
+  1. Make **private working set of the Mushoku Guild process tree** the memory budget metric. Always report the summed working set next to it for transparency.
+  2. Proposed private-working-set targets, set with headroom over the measured values and to be re-checked with real providers, SQLite and art: idle ≤ 120 MB (limit 150 MB), active ≤ 140 MB (limit 180 MB). These are proposals derived from 84/90/96 MB measured; they are not requirements met.
+  3. Keep every other ADR-0012 number unchanged: all of them were met (or are still unmeasured, see below).
+  4. Add two design rules found by measurement: **no `requestAnimationFrame` loop in idle states** (use timers that fire only when something changes) and **all renderer tickers stopped when the window is minimised** (the Rust core publishes window state because WebView2 does not).
+  5. Keep these as explicitly **open** metrics, to be measured when the pieces exist: memory growth over 8 hours, idle disk writes, visible-but-unfocused CPU, first-ever-launch start-up.
+- **Alternatives considered:** Keep the literal metric and fail the gate (a pass is impossible on this stack, so it would only block work); count only the app and renderer processes (arbitrary, hides real memory); use "commit" or "private bytes" (not measured here; private working set was available and comparable to Task Manager's "active private working set").
+- **Consequences if accepted:** the gate for memory becomes meaningful; the stack decision (ADR-0010) stands; ADR-0012 is edited to record the amendment (never silently).
+- **Status:** proposed. `docs/architecture.md` §9 keeps showing the original targets until the user decides.
 
 ### Other candidate decisions (not yet drafted)
 - Credential storage mechanism (Windows Credential Manager vs protected file).

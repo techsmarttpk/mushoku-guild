@@ -2,7 +2,7 @@
 
 Working memory for the project. Future sessions must read this first. Every item is labelled **[Confirmed]**, **[Assumption]** or **[Open]**. Do not promote assumptions to requirements without the user's agreement (record in `docs/DECISIONS.md`).
 
-_Last updated: 2026-11-08 (Phase 1 completed; stack, MVP scope and budgets accepted)._
+_Last updated: 2026-11-08 (Phase 2 tasks 2.0–2.6 complete; measurement gate awaiting review)._
 
 ## 1. What Mushoku Guild is
 
@@ -81,7 +81,7 @@ The goal is to **automate this workflow**, removing the manual copy/paste handof
 
 ## 9. Current project status
 
-- **Phase:** Phase 1 (Discovery) **completed** 2026-11-08. The user accepted ADR-0010 (stack), ADR-0011 (MVP scope) and ADR-0012 (provisional budgets). Phase 2 (Foundation) is prepared but **not started**; it begins only on the user's explicit instruction. ADR-0007, ADR-0008 and ADR-0009 remain **proposed**, and every release blocker in §15.4 remains **open**.
+- **Phase:** Phase 1 (Discovery) **completed** 2026-11-08. **Phase 2 (Foundation) is in progress:** tasks 2.0–2.6 are complete and verified, including the measurement gate (`docs/architecture.md` §13); tasks 2.7–2.10 are on hold until the user reviews the gate. ADR-0010, ADR-0011 and ADR-0012 are accepted; ADR-0012 amendment A is **proposed**; ADR-0007, ADR-0008 and ADR-0009 remain proposed; every release blocker in §15.4 remains open.
 - Repository created at `https://github.com/techsmarttpk/mushoku-guild`, branch `main`.
 - Governance and design documents established.
 - **No application code exists. No technology has been chosen.**
@@ -354,3 +354,17 @@ Nothing here is resolved by this document; items are classified by when they mus
 8. Supply chain: pinned versions, lockfiles, `cargo audit`/`npm audit` in CI, no unreviewed install scripts.
 9. No telemetry; logs local, bounded and secret-redacted.
 10. Single instance; the second launch focuses the first window.
+
+## 16. Phase 2 learned facts (tasks 2.0–2.6, 2026-11-08)
+
+Facts future sessions must not rediscover. Evidence and numbers: `docs/architecture.md` §12–§14 and `docs/measurements/phase2/`.
+
+- **Status:** Phase 2 tasks 2.0–2.6 are complete and verified; the measurement gate verdict is in `docs/architecture.md` §13.5 and awaits the user's review. Tasks 2.7–2.10 have not been started and must not start before that review.
+- **WebView2 does not report minimise/hide to the page.** The Rust core publishes `window-minimized`; the scene stops on it. Never rely on `document.hidden` or `visibilitychange` for minimisation in this app.
+- **PixiJS v8 has two tickers.** `Ticker.system` (event polling) runs on `requestAnimationFrame` by default and costs about 1.7% of total CPU even for a static scene; it is stopped in every mode. Pixi's `maxFPS` does not stop the browser from waking at display rate, so idle animation must use timers, not a ticker.
+- **Memory must be judged by private working set.** Summed working sets of the 7 WebView2 processes (355 MB for a blank page) double-count shared pages.
+- **Default GPU is the discrete GTX 1650**, utilisation about 0%; forcing the iGPU did not help CPU and cost 25 MB private memory. Do not add GPU-preference hacks.
+- **Build environment:** Rust 1.99.1 and VS Build Tools live on `D:` (`C:` had only 12 GB free); builds need the VS developer environment until the optional registration repair in `docs/architecture.md` §12 is done by an elevated prompt. Tauri's NSIS download may time out on slow links: fetch the hash-pinned files manually (§13.3 F8).
+- **Harness limits:** the measurement harness cannot reliably take OS focus away from the app (foreground lock); never use a synthetic Alt key tap (it stalls the WebView). Visible-but-unfocused behaviour is unmeasured.
+- **`bench.rs`, `src/bench.ts` and the `bench_*` IPC commands are Phase 2 measurement fixtures, not product code.** They are inert without `MUSHOKU_BENCH_OUT`. Remove or gate them before Phase 3 begins.
+- **Open questions added:** whether to accept ADR-0012 amendment A; whether to exercise WebView2 `TrySuspend`/`MemoryUsageTargetLevel` later (reachable, untested); first-ever-launch and cold-boot start-up; whether the app should hide to tray (then it knows it is hidden).

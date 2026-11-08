@@ -1,0 +1,82 @@
+{
+ "env": {
+  "os": "Windows_NT 10.0.26200 Windows 11 Home Single Language",
+  "totalRamGB": 15.8,
+  "node": "v24.13.0",
+  "exe": "mushoku-guild.exe",
+  "exeSizeMB": 3.17,
+  "gpus": "Intel(R) UHD Graphics 30.0.101.1994 ; NVIDIA GeForce GTX 1650 32.0.15.9282",
+  "powerScheme": "f2336ab2-3612-44c2-b7e4-1abbfb7b928e  (Gaming)",
+  "logical": 8,
+  "batteryStatus": "2",
+  "webview2": "157.0.4341.42",
+  "cpu": "Intel(R) Core(TM) i5-10300H CPU @ 2.50GHz",
+  "note": "batteryStatus 2 = on AC power"
+ },
+ "rows": [
+  {
+   "scenario": "idle-static",
+   "runs": 3,
+   "startupMs": {
+    "n": 3,
+    "mean": 1134.967,
+    "median": 1093.9,
+    "p95": 1375.6,
+    "max": 1375.6,
+    "min": 935.4
+   },
+   "cpuMeanPct": {
+    "n": 3,
+    "mean": 0.058,
+    "median": 0.057,
+    "p95": 0.081,
+    "max": 0.081,
+    "min": 0.036
+   },
+   "cpuMaxPct": {
+    "n": 3,
+    "mean": 1.622,
+    "median": 1.931,
+    "p95": 2.169,
+    "max": 2.169,
+    "min": 0.767
+   },
+   "wsMeanMB": {
+    "n": 3,
+    "mean": 368.94,
+    "median": 368.92,
+    "p95": 369.216,
+    "max": 369.216,
+    "min": 368.684
+   },
+   "wsMaxMB": {
+    "n": 3,
+    "mean": 374,
+    "median": 374.1,
+    "p95": 374.2,
+    "max": 374.2,
+    "min": 373.7
+   },
+   "privMeanMB": {
+    "n": 3,
+    "mean": 91.172,
+    "median": 91.138,
+    "p95": 91.64,
+    "max": 91.64,
+    "min": 90.738
+   },
+   "procsMax": {
+    "n": 3,
+    "mean": 7,
+    "median": 7,
+    "p95": 7,
+    "max": 7,
+    "min": 7
+   },
+   "fps": {
+    "n": 0
+   },
+   "latency": []
+  }
+ ]
+}

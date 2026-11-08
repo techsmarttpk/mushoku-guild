@@ -1,0 +1,156 @@
+{
+ "env": {
+  "os": "Windows_NT 10.0.26200 Windows 11 Home Single Language",
+  "totalRamGB": 15.8,
+  "node": "v24.13.0",
+  "exe": "mushoku-guild.exe",
+  "exeSizeMB": 3.17,
+  "gpus": "Intel(R) UHD Graphics 30.0.101.1994 ; NVIDIA GeForce GTX 1650 32.0.15.9282",
+  "powerScheme": "f2336ab2-3612-44c2-b7e4-1abbfb7b928e  (Gaming)",
+  "logical": 8,
+  "batteryStatus": "2",
+  "webview2": "157.0.4341.42",
+  "cpu": "Intel(R) Core(TM) i5-10300H CPU @ 2.50GHz",
+  "note": "batteryStatus 2 = on AC power"
+ },
+ "rows": [
+  {
+   "scenario": "idle-static",
+   "runs": 2,
+   "startupMs": {
+    "n": 2,
+    "mean": 1162.2,
+    "median": 1192.9,
+    "p95": 1192.9,
+    "max": 1192.9,
+    "min": 1131.5
+   },
+   "cpuMeanPct": {
+    "n": 2,
+    "mean": 1.627,
+    "median": 1.668,
+    "p95": 1.668,
+    "max": 1.668,
+    "min": 1.587
+   },
+   "cpuMaxPct": {
+    "n": 2,
+    "mean": 2.78,
+    "median": 2.793,
+    "p95": 2.793,
+    "max": 2.793,
+    "min": 2.768
+   },
+   "wsMeanMB": {
+    "n": 2,
+    "mean": 414.108,
+    "median": 414.156,
+    "p95": 414.156,
+    "max": 414.156,
+    "min": 414.059
+   },
+   "wsMaxMB": {
+    "n": 2,
+    "mean": 418.35,
+    "median": 418.4,
+    "p95": 418.4,
+    "max": 418.4,
+    "min": 418.3
+   },
+   "privMeanMB": {
+    "n": 2,
+    "mean": 118.136,
+    "median": 118.771,
+    "p95": 118.771,
+    "max": 118.771,
+    "min": 117.5
+   },
+   "procsMax": {
+    "n": 2,
+    "mean": 7,
+    "median": 7,
+    "p95": 7,
+    "max": 7,
+    "min": 7
+   },
+   "fps": {
+    "n": 2,
+    "mean": 0,
+    "median": 0,
+    "p95": 0,
+    "max": 0,
+    "min": 0
+   },
+   "latency": []
+  },
+  {
+   "scenario": "idle-focused",
+   "runs": 2,
+   "startupMs": {
+    "n": 2,
+    "mean": 1101.1,
+    "median": 1152.7,
+    "p95": 1152.7,
+    "max": 1152.7,
+    "min": 1049.5
+   },
+   "cpuMeanPct": {
+    "n": 2,
+    "mean": 2.16,
+    "median": 2.203,
+    "p95": 2.203,
+    "max": 2.203,
+    "min": 2.117
+   },
+   "cpuMaxPct": {
+    "n": 2,
+    "mean": 4.369,
+    "median": 4.489,
+    "p95": 4.489,
+    "max": 4.489,
+    "min": 4.248
+   },
+   "wsMeanMB": {
+    "n": 2,
+    "mean": 414.401,
+    "median": 415.059,
+    "p95": 415.059,
+    "max": 415.059,
+    "min": 413.742
+   },
+   "wsMaxMB": {
+    "n": 2,
+    "mean": 419.95,
+    "median": 420.2,
+    "p95": 420.2,
+    "max": 420.2,
+    "min": 419.7
+   },
+   "privMeanMB": {
+    "n": 2,
+    "mean": 118.719,
+    "median": 120.146,
+    "p95": 120.146,
+    "max": 120.146,
+    "min": 117.292
+   },
+   "procsMax": {
+    "n": 2,
+    "mean": 7,
+    "median": 7,
+    "p95": 7,
+    "max": 7,
+    "min": 7
+   },
+   "fps": {
+    "n": 2,
+    "mean": 14.915,
+    "median": 14.92,
+    "p95": 14.92,
+    "max": 14.92,
+    "min": 14.91
+   },
+   "latency": []
+  }
+ ]
+}

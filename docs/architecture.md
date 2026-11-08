@@ -172,9 +172,9 @@ Event and entity details: `docs/system-design.md`.
 - Target platform: Windows 11 at minimum; others TBD.
 - Distribution: proposed NSIS installer; auto-update deferred (post-MVP); signing is a release item (`docs/context.md` §15.4).
 
-## 9. Resource budget (ACCEPTED as provisional engineering targets — ADR-0012; not yet measured)
+## 9. Resource budget (ACCEPTED as provisional engineering targets — ADR-0012; first measurements in §13; amendment A proposed)
 
-Reference machine: i5-10300H (4C/8T), 15.8 GB RAM, Intel UHD + GTX 1650, Windows 11. **No number below has been measured for this stack.** The user accepted these as provisional engineering targets with binding qualifications: (1) **measure, do not assume**; (2) **stability and security take priority** over meeting any number; (3) if a target is unrealistic, **document the evidence and propose a revised target** for approval; (4) **`claude.exe` and its children are measured and reported separately** from Mushoku Guild's own usage. They were chosen to be meaningfully lighter than the agent the app launches (`claude.exe` used about 200–285 MB for a small run, `docs/context.md` §13.8) and are verified or revised by the Phase 2 measurement gate. "Mushoku Guild process tree" means the Tauri app process plus all WebView2 processes it owns, **excluding** `claude.exe` and its children (the user's tool).
+Reference machine: i5-10300H (4C/8T), 15.8 GB RAM, Intel UHD + GTX 1650, Windows 11. **The targets below are the original ADR-0012 numbers, kept unchanged; the Phase 2 measurements against them are in §13 (the two RAM rows fail as literally defined; amendment A is proposed, not accepted).** The user accepted these as provisional engineering targets with binding qualifications: (1) **measure, do not assume**; (2) **stability and security take priority** over meeting any number; (3) if a target is unrealistic, **document the evidence and propose a revised target** for approval; (4) **`claude.exe` and its children are measured and reported separately** from Mushoku Guild's own usage. They were chosen to be meaningfully lighter than the agent the app launches (`claude.exe` used about 200–285 MB for a small run, `docs/context.md` §13.8) and are verified or revised by the Phase 2 measurement gate. "Mushoku Guild process tree" means the Tauri app process plus all WebView2 processes it owns, **excluding** `claude.exe` and its children (the user's tool).
 
 Assumption (confirmed by the user's direction): **one Reasoner request and one Executor run at a time.** Multiple simultaneous coding agents are not a goal, and the budgets assume none.
 
@@ -265,3 +265,99 @@ Reference machine: Windows 11 Home 10.0.26200, i5-10300H (4C/8T), 15.8 GB RAM, I
 Install footprint: Build Tools ≈ 1.6 GB on `D:`; Rust ≈ 0.7 GB on `D:`; SDK on `D:`; `C:` was not meaningfully consumed.
 
 **Known environment issue (tooling, not design):** I installed with a temporary Visual Studio setup policy that moved the package cache to `D:` (to protect the 12 GB `C:`), and removed the policy afterwards. The instance registration therefore sits in `D:\toolchains\vs-cache\_Instances\21e3d51a` instead of `C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances`, so `vswhere` and `rustc`'s automatic MSVC discovery find nothing. Verified workaround: run builds inside the developer environment (`D:\toolchains\BuildTools2022\VC\Auxiliary\Build\vcvars64.bat`), after which `cargo build` links correctly. Optional permanent fix (needs an elevated prompt): `robocopy D:\toolchains\vs-cache\_Instances\21e3d51a C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances\21e3d51a /E`. The one attempt to run this automatically was cancelled at the UAC prompt; nothing was forced.
+
+
+## 13. Phase 2 measurement gate (tasks 2.3–2.6) — results of 2026-11-08
+
+Everything in this section is **measured** unless explicitly labelled *not measured* or *inference*. Method, environment, scenario definitions, file inventory and known limits: `docs/measurements/phase2/README.md`. Raw data: `docs/measurements/phase2/raw/`. The numbers describe the **final** build (`final2` tag): Tauri 2.12.5, release profile, WebView2 157.0.4341.42, reference laptop on AC power. Mushoku Guild's own process tree only (app + 6 WebView2 processes); `claude.exe` is **not** included (ADR-0012 qualification 4).
+
+### 13.1 Results (3 runs per scenario; mean of run means, with the range of run means in brackets)
+
+| Scenario | Startup to first frame | CPU, % of total machine | Summed working set | Private working set | Processes | Scene steps / draws per second |
+|----------|-----------------------|------------------------|--------------------|--------------------|-----------|-------------------------------|
+| Blank (Tauri + React, no Pixi) | 860 ms (829–902) | 0.037% (0.031–0.044) | 355 MB | 84 MB | 7 | – |
+| Static scene (drawn once) | 955 ms (907–994) | 0.060% (0.048–0.071) | 370 MB | 94 MB | 7 | 0 / 0 |
+| **Ambient idle, focused** | 889 ms (874–898) | **0.313%** (0.236–0.371); worst 1 s sample 3.54% | 371 MB | **90 MB** | 7 | 2.91 / 2.91 |
+| **Minimised** | 938 ms (911–974) | **0.051%** (0.032–0.088) | 370 MB | 91 MB | 7 | 0 / 0 |
+| Hidden from outside the app (`SW_HIDE`) | 938 ms (926–948) | 0.327% (0.242–0.446) | 371 MB | 90 MB | 7 | 2.90 / 2.90 |
+| **Active** (30 fps scene + 60 events/s over a Channel) | 964 ms (940–979) | **4.25%** (3.99–4.47); worst 1 s sample 6.90% | 377 MB | **96 MB** | 7 | 29.55 / 29.55 |
+
+- **Event latency** (core → UI, 2,700 events per run, 3 runs): p50 0.52–0.63 ms, p95 1.49–1.56 ms, p99 about 2.0 ms, max 4.0–12.0 ms, **0 gaps/reordering**. Same-machine clocks, so about 1 ms of clock uncertainty.
+- **Installer:** `Mushoku Guild_0.0.0_x64-setup.exe` = 1,334,774 bytes (**1.27 MiB**), unsigned, `downloadBootstrapper` WebView2 mode. **Installed size 3.25 MB** (`mushoku-guild.exe` 3,326,976 bytes + `uninstall.exe`); the Evergreen WebView2 runtime is a shared system component and not part of it. A silent install took 1.6 s; the installed copy launched and reported ready in 1.16 s; uninstall (exit 0) removed the files, the HKCU uninstall entry and the Start Menu shortcut. The app's WebView2 data folder under `%LOCALAPPDATA%` is left behind by a silent uninstall (normal NSIS behaviour; the interactive uninstaller offers to delete it) and was removed manually after the test.
+- **GPU (task 2.5):** in idle, minimised and active states every GPU engine instance belongs to the **NVIDIA GTX 1650**, utilisation reads 0% (integer counter, so "small", not "zero"); the Intel UHD is never used by default, although the page asked for `powerPreference: 'low-power'`. See findings F5/F6.
+- **Release binary:** 3,326,976 bytes; frontend bundle about 750 KB uncompressed (about 220 KB gzip), mostly PixiJS.
+
+### 13.2 Comparison with ADR-0012 (provisional targets)
+
+| ADR-0012 metric | Target / hard limit | Measured | Verdict |
+|-----------------|--------------------|----------|---------|
+| Cold start to interactive | ≤ 2.5 s / 4 s | 0.83–0.99 s per run (warm WebView2 profile; first-ever launch and cold-boot not separately measured) | **Pass** (qualified) |
+| Installer size | ≤ 15 MB / 30 MB | 1.27 MiB | **Pass** |
+| Installed size | ≤ 60 MB / 120 MB | 3.25 MB (excluding the shared WebView2 runtime) | **Pass** |
+| Idle RAM, **sum of working sets** | ≤ 180 MB / 250 MB | 371 MB (blank page: 355 MB) | **Fail as defined**; see F4 |
+| Active RAM, sum of working sets | ≤ 260 MB / 350 MB | 377 MB | **Fail as defined**; see F4 |
+| (same, **private** working set; not the ADR's wording) | (same numbers) | idle 90 MB, active 96 MB (blank: 84 MB) | Within targets |
+| RAM growth over 8 h | ≤ +50 MB / +120 MB | *not measured* | **Open** |
+| Idle CPU, focused, ambient animation | ≤ 2% / 4% | 0.31% | **Pass** |
+| Idle CPU, hidden/minimised/unfocused | ≤ 0.3% / 1% | minimised 0.051% (pass); hidden from outside the app 0.33% (marginally above target, below limit; the app cannot see that); visible-but-unfocused *not measured* | **Pass for minimised; partly open** |
+| Active CPU | ≤ 8% / 15% | 4.25% mean, 6.9% worst second | **Pass** |
+| Frame rate | ≤ 30 fps active, ≤ 15 fps ambient, 0 hidden | 29.55 fps active; ambient 2.91 timer steps/s (no animation-frame loop); 0 when minimised | **Pass** |
+| GPU use | integrated GPU preferred; ≤ 5% | discrete GPU in use; utilisation 0% | Utilisation **pass**; adapter preference **not met by default** (F5) |
+| Process count | ≤ 8 / 12 | 7 (one earlier invalid run showed 9) | **Pass** |
+| Idle disk writes | 0 per minute | *not measured* | **Open** |
+| Event latency | p95 ≤ 100 ms / 250 ms | p95 ≈ 1.5 ms | **Pass** |
+| SQLite size | bounded by retention | not applicable yet | – |
+
+### 13.3 Findings (each backed by a recorded measurement)
+
+- **F1 — WebView2 does not tell the page that its window is minimised or hidden.** `document.hidden` stayed `false`, no `visibilitychange` fired, and the page kept animating at full rate while minimised or `SW_HIDE`-hidden. Fix implemented: the Rust core publishes a `window-minimized` event (from the window's resize events) and the scene stops; frames measured 24 → 24 across 5 s while minimised and resumed at the normal rate on restore. A window hidden by *other software* cannot be detected this way; a window the app hides itself is known to the app.
+- **F2 — PixiJS's internal system ticker costs 1.7% of total CPU on its own.** With the scene "stopped" (my ticker stopped, 0 frames) CPU was still 1.72% against 0.05% for a blank page. Per-process snapshots put the cost in the GPU process (~1.0%) and renderer (~0.4%). Hiding the canvas, detaching it, or losing the WebGL context changed nothing; destroying the Pixi app, or stopping `Ticker.system` alone, brought it to 0.05%. Pixi starts that ticker for its event system; it polls on `requestAnimationFrame`.
+- **F3 — any `requestAnimationFrame` loop costs about the same regardless of Pixi's `maxFPS`.** Capping the render loop at 15, then 8 ticks/s (and 6, then 3 draws/s with render-on-demand) left CPU at 1.9–2.5%. `maxFPS` only skips work inside the callback; the browser still wakes at display rate. A plain `setTimeout` loop that changes the pose ~3 times per second and draws only then costs **0.31%**. Rule adopted in the scene controller: no rAF loop in idle states; rAF only in active mode.
+- **F4 — "sum of working sets" is the wrong memory metric for WebView2.** The seven processes share most of their pages: a blank page already sums to 355 MB, but its private working set is 84 MB. The ADR-0012 wording cannot be met with this stack by any app on this machine; the app's own contribution is about 6 MB private (blank 84 → idle 90 → active 96 MB). Proposal in `docs/DECISIONS.md` (ADR-0012 amendment A, **proposed, not accepted**).
+- **F5 — GPU choice does not explain CPU use, and the default is the discrete GPU.** WebView2's GPU process used the GTX 1650 regardless of `powerPreference: 'low-power'` (Chromium on Windows does not act on that hint here; *inference* from the observation). With the Windows graphics preference for the WebView2 runtime temporarily set to "power saving" (set, tested, removed; the original "none" was restored and checked), the Intel UHD showed 3D activity, CPU did not change (static 1.63%, ambient 2.16% vs 1.72%/2.18% in the same period), private memory **rose** from 93 to 118 MB (integrated GPU uses system RAM) and startup slowed from about 1.0 s to 1.1–1.2 s. Conclusion: leave the default; do not ship a GPU-preference hack. The per-app Windows setting is keyed to the versioned runtime path, so it would not be maintainable anyway.
+- **F6 — GPU load is negligible.** 0% on every engine in idle, minimised and active states for a 640×360 scene. The cost of this scene is CPU wake-ups (F2/F3), not GPU work.
+- **F7 — WebView2 does not trim memory by itself when minimised** (private working set 91 MB minimised vs 90 MB focused). WebView2's `TrySuspend` and `MemoryUsageTargetLevel` are **reachable**: `WebviewWindow::with_webview` exposes `PlatformWebview::controller()` (an `ICoreWebView2Controller`) in tauri 2.12.5, and the `webview2-com` bindings in the lockfile contain both APIs (verified by reading the sources). They were **not exercised**, because that needs a direct `webview2-com`/`windows` dependency; their benefit is unknown and not needed to meet any CPU target.
+- **F8 — Tooling facts for the repository.** (a) Tauri's own NSIS download timed out on this connection (about 110 KB/s); the same official files were fetched manually and verified against the SHA-1 hashes pinned in Tauri's bundler source before being placed in `%LOCALAPPDATA%\tauri\NSIS`, after which bundling worked. (b) Windows focus cannot be reliably taken from the app by the harness (foreground lock), so the visible-but-unfocused state is unmeasured. (c) A synthetic Alt key tap used to steal focus stalls the WebView page; the harness no longer uses it.
+
+### 13.4 Implementation vs the proposed design (documentation drift check)
+
+| Proposed (docs before Phase 2) | Actual |
+|--------------------------------|--------|
+| "Pixi ticker stopped when hidden/minimised/unfocused", one ticker | Two Pixi tickers exist; scene regimes are *stopped / ambient (timer) / active (rAF)*; system ticker always stopped. Window minimisation comes from a Rust event, not from the page. |
+| "Render-on-demand loop" | Implemented: the scene draws only on change (ambient: per pose step; active: per tick); Pixi's automatic render-every-tick listener is removed. |
+| Frontend ↔ core contract: commands + one ordered Channel | Implemented: `app_info` command, `bench_stream` Channel, one `window-minimized` event. Event payloads are not coalesced yet (no real streams exist). |
+| No shell/filesystem/SQL access from the frontend | Holds: capability is `core:default` only. The `bench_*` commands write only to the path given by the harness environment variable and are inert otherwise; **they are Phase 2 measurement fixtures and must be removed or gated behind a Cargo feature before Phase 3** (tracked in `docs/plan.md`). |
+| CSP / isolation / single-instance | **Not done** (task 2.8, on hold): `app.security.csp` is `null`. |
+| Lint/format/test tooling | **Not done** (task 2.7, on hold): no `rustfmt`/`clippy`/ESLint/Prettier/test runners installed or run. Only `tsc --noEmit` (strict) and compiler warnings (none) were checked. |
+
+### 13.5 Gate verdict
+
+**The stack is viable and no budget is missed in a way that threatens stability or security.** Startup, installer/installed size, CPU in every state the app can detect, frame rates, process count and event latency meet the ADR-0012 targets with large margins. The two RAM rows fail *as literally defined* (sum of working sets) because that metric cannot be satisfied by a blank WebView2 page on this machine; by private working set the app uses 90–96 MB. Open or unmeasured: memory growth over hours, idle disk writes, the visible-but-unfocused state, the first-ever-launch start-up, and real-world numbers once providers, SQLite and real art exist. Nothing found requires the .NET + Skia fallback. **The decision to continue, and the ADR-0012 amendment, are the user's** (`docs/DECISIONS.md`).
+
+### 13.6 Environment quirks recorded for reproducibility
+Builds currently run inside the Visual Studio developer environment (`vcvars64.bat`) because the Build Tools instance registration is not in the standard `C:\ProgramData` location (§12). `cargo build --release` of the whole stack takes about 4 m 42 s cold and about 1 m 17 s incrementally; debug cold build 8 m 09 s.
+
+## 14. Dependencies and repository structure after Phase 2 (tasks 2.0–2.6)
+
+**Direct dependencies (all exact-pinned via lockfiles; every one is part of ADR-0010):**
+
+| Ecosystem | Package | Version | Why |
+|-----------|---------|---------|-----|
+| Rust | `tauri` | 2.12.5 | Application shell, IPC, windowing (ADR-0010) |
+| Rust | `tauri-build` | 2.7.4 | Build script required by Tauri |
+| Rust | `serde`, `serde_json` | 1.0.229, 1.0.154 | Typed IPC payloads |
+| npm (runtime) | `react`, `react-dom` | 19.3.1 | UI (ADR-0010) |
+| npm (runtime) | `pixi.js` | 8.22.0 | Café scene (ADR-0010) |
+| npm (runtime) | `@tauri-apps/api` | 2.12.4 | Typed access to Rust commands/events |
+| npm (dev) | `typescript` 7.0.2, `vite` 8.3.6, `@vitejs/plugin-react` 6.2.1, `@types/react` and `@types/react-dom` 19.3.0, `@tauri-apps/cli` 2.12.4 | | Build and type-check |
+
+`src-tauri/Cargo.lock` locks **404 packages** (almost all transitive via Tauri). Not yet reviewed: Tauri's default features compile `muda` (menus) and pull in `tray-icon`, which this app does not use; the feature/dependency audit is part of task 2.7/2.8 and is **not** done. The Rust toolchain, Build Tools, WebView2 and Node/pnpm versions are in §12.
+
+**Repository structure (code added in Phase 2):**
+```
+index.html, package.json, pnpm-lock.yaml, tsconfig.json, vite.config.ts
+src/                  main.tsx, App.tsx, ipc.ts, bench.ts, styles.css, cafe/CafeScene.ts
+src-tauri/            Cargo.toml, Cargo.lock, build.rs, tauri.conf.json, capabilities/default.json, icons/ (placeholder), src/{main,lib,bench}.rs
+tools/measure/        measure.mjs, sampler.ps1, window.ps1   (Phase 2 measurement harness)
+docs/measurements/phase2/   README.md, raw data, summaries
+```
