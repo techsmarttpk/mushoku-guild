@@ -46,6 +46,22 @@ CREATE TABLE approvals (
   ts INTEGER NOT NULL, tool_name TEXT NOT NULL, input_summary TEXT NOT NULL,
   decision TEXT NOT NULL, decided_by TEXT NOT NULL);
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+"#,
+r#"
+ALTER TABLE executions ADD COLUMN exit_code INTEGER;
+ALTER TABLE executions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'ask';
+CREATE TABLE chat_conversations (
+  id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX chat_conv_project ON chat_conversations(project_id, id DESC);
+CREATE TABLE chat_messages (
+  id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  role TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE INDEX chat_msg_conv ON chat_messages(conversation_id, id);
+CREATE TABLE repo_research (
+  project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  status TEXT NOT NULL, report TEXT NOT NULL DEFAULT '', files TEXT NOT NULL DEFAULT '[]',
+  researched_at INTEGER NOT NULL, fingerprint TEXT NOT NULL DEFAULT '', note TEXT);
 "#];
 
 /// Task lifecycle. `from -> to` pairs not listed here are rejected.
@@ -118,6 +134,8 @@ pub struct Execution {
     pub num_turns: Option<i64>,
     pub denial_count: i64,
     pub note: Option<String>,
+    pub exit_code: Option<i64>,
+    pub permission_mode: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -128,6 +146,39 @@ pub struct StoredEvent {
     pub kind: String,
     pub title: String,
     pub detail: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Conversation {
+    pub id: i64,
+    pub project_id: i64,
+    pub title: String,
+    pub updated_at: i64,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+    pub id: i64,
+    pub conversation_id: i64,
+    pub role: String,
+    pub body: String,
+    pub created_at: i64,
+}
+
+/// Claude's repository research for one project (read-only; stored locally, redacted).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Research {
+    pub project_id: i64,
+    /// "researching" | "ready" | "failed" | "cancelled" (the UI derives "stale"/"none")
+    pub status: String,
+    pub report: String,
+    pub files: Vec<String>,
+    pub researched_at: i64,
+    pub fingerprint: String,
+    pub note: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -314,19 +365,21 @@ impl Db {
     }
 
     // ---- executions, events, approvals
-    pub fn start_execution(&self, task_id: i64, draft_id: i64, policy: &str) -> Result<i64, String> {
+    pub fn start_execution(&self, task_id: i64, draft_id: i64, policy: &str, permission_mode: &str) -> Result<i64, String> {
         let c = self.c();
         c.execute(
-            "INSERT INTO executions(task_id,prompt_draft_id,policy,status,started_at) VALUES(?1,?2,?3,'running',?4)",
-            params![task_id, draft_id, policy, now_ms()],
+            "INSERT INTO executions(task_id,prompt_draft_id,policy,status,started_at,permission_mode) VALUES(?1,?2,?3,'running',?4,?5)",
+            params![task_id, draft_id, policy, now_ms(), permission_mode],
         )
         .map_err(|e| e.to_string())?;
         Ok(c.last_insert_rowid())
     }
-    pub fn finish_execution(&self, id: i64, status: &str, result_text: Option<&str>, num_turns: Option<i64>, denials: i64, note: Option<&str>) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_execution(&self, id: i64, status: &str, result_text: Option<&str>, num_turns: Option<i64>, denials: i64, note: Option<&str>, exit_code: Option<i64>) {
+        // `AND status='running'` makes the terminal state write-once: a duplicate finish cannot change an outcome.
         let _ = self.c().execute(
-            "UPDATE executions SET status=?2, ended_at=?3, result_text=?4, num_turns=?5, denial_count=?6, note=?7 WHERE id=?1",
-            params![id, status, now_ms(), result_text, num_turns, denials, note],
+            "UPDATE executions SET status=?2, ended_at=?3, result_text=?4, num_turns=?5, denial_count=?6, note=?7, exit_code=?8 WHERE id=?1 AND status='running'",
+            params![id, status, now_ms(), result_text, num_turns, denials, note, exit_code],
         );
         self.prune_events();
     }
@@ -355,7 +408,7 @@ impl Db {
     pub fn executions(&self, task_id: i64) -> Vec<Execution> {
         let c = self.c();
         let mut st = c
-            .prepare("SELECT id,task_id,policy,status,started_at,ended_at,result_text,num_turns,denial_count,note FROM executions WHERE task_id=?1 ORDER BY id")
+            .prepare("SELECT id,task_id,policy,status,started_at,ended_at,result_text,num_turns,denial_count,note,exit_code,permission_mode FROM executions WHERE task_id=?1 ORDER BY id")
             .expect("sql");
         st.query_map([task_id], |r| {
             Ok(Execution {
@@ -369,6 +422,8 @@ impl Db {
                 num_turns: r.get(7)?,
                 denial_count: r.get(8)?,
                 note: r.get(9)?,
+                exit_code: r.get(10)?,
+                permission_mode: r.get(11)?,
             })
         })
         .map(|r| r.filter_map(Result::ok).collect())
@@ -386,6 +441,83 @@ impl Db {
             .unwrap_or_default()
     }
 
+    // ---- chat
+    pub fn latest_conversation(&self, project_id: i64) -> Option<Conversation> {
+        self.c()
+            .query_row("SELECT id,project_id,title,updated_at FROM chat_conversations WHERE project_id=?1 ORDER BY id DESC LIMIT 1", [project_id], conv_row)
+            .optional()
+            .ok()
+            .flatten()
+    }
+    pub fn create_conversation(&self, project_id: i64) -> Result<Conversation, String> {
+        let now = now_ms();
+        let c = self.c();
+        c.execute("INSERT INTO chat_conversations(project_id,title,created_at,updated_at) VALUES(?1,'New conversation',?2,?2)", params![project_id, now]).map_err(|e| e.to_string())?;
+        let id = c.last_insert_rowid();
+        c.query_row("SELECT id,project_id,title,updated_at FROM chat_conversations WHERE id=?1", [id], conv_row).map_err(|e| e.to_string())
+    }
+    pub fn conversation(&self, id: i64) -> Option<Conversation> {
+        self.c().query_row("SELECT id,project_id,title,updated_at FROM chat_conversations WHERE id=?1", [id], conv_row).optional().ok().flatten()
+    }
+    pub fn chat_messages(&self, conversation_id: i64) -> Vec<ChatMessage> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT id,conversation_id,role,body,created_at FROM chat_messages WHERE conversation_id=?1 ORDER BY id").expect("sql");
+        st.query_map([conversation_id], msg_row).map(|r| r.filter_map(Result::ok).collect()).unwrap_or_default()
+    }
+    pub fn add_chat_message(&self, conversation_id: i64, role: &str, body: &str) -> Result<ChatMessage, String> {
+        let now = now_ms();
+        let c = self.c();
+        c.execute("INSERT INTO chat_messages(conversation_id,role,body,created_at) VALUES(?1,?2,?3,?4)", params![conversation_id, role, body, now]).map_err(|e| e.to_string())?;
+        let id = c.last_insert_rowid();
+        // the first user message names the conversation
+        let _ = c.execute(
+            "UPDATE chat_conversations SET updated_at=?2, title=CASE WHEN title='New conversation' AND ?3='user' THEN substr(?4,1,60) ELSE title END WHERE id=?1",
+            params![conversation_id, now, role, body],
+        );
+        c.query_row("SELECT id,conversation_id,role,body,created_at FROM chat_messages WHERE id=?1", [id], msg_row).map_err(|e| e.to_string())
+    }
+
+    // ---- repository research
+    pub fn research(&self, project_id: i64) -> Option<Research> {
+        self.c()
+            .query_row("SELECT project_id,status,report,files,researched_at,fingerprint,note FROM repo_research WHERE project_id=?1", [project_id], |r| {
+                let files: String = r.get(3)?;
+                Ok(Research {
+                    project_id: r.get(0)?,
+                    status: r.get(1)?,
+                    report: r.get(2)?,
+                    files: serde_json::from_str(&files).unwrap_or_default(),
+                    researched_at: r.get(4)?,
+                    fingerprint: r.get(5)?,
+                    note: r.get(6)?,
+                })
+            })
+            .optional()
+            .ok()
+            .flatten()
+    }
+    /// Marks research as running while keeping any earlier report.
+    pub fn research_started(&self, project_id: i64) {
+        let _ = self.c().execute(
+            "INSERT INTO repo_research(project_id,status,researched_at) VALUES(?1,'researching',?2)
+             ON CONFLICT(project_id) DO UPDATE SET status='researching', note=NULL",
+            params![project_id, now_ms()],
+        );
+    }
+    /// Stores a finished research. A failed or cancelled run keeps the previous report.
+    pub fn research_finished(&self, project_id: i64, status: &str, report: Option<&str>, files: &[String], fingerprint: &str, note: Option<&str>) {
+        let files_json = serde_json::to_string(files).unwrap_or_else(|_| "[]".into());
+        let c = self.c();
+        let _ = c.execute(
+            "INSERT INTO repo_research(project_id,status,report,files,researched_at,fingerprint,note) VALUES(?1,?2,COALESCE(?3,''),?4,?5,?6,?7)
+             ON CONFLICT(project_id) DO UPDATE SET status=?2, note=?7,
+               report=COALESCE(?3, report), files=CASE WHEN ?3 IS NULL THEN files ELSE ?4 END,
+               researched_at=CASE WHEN ?3 IS NULL THEN researched_at ELSE ?5 END,
+               fingerprint=CASE WHEN ?3 IS NULL THEN fingerprint ELSE ?6 END",
+            params![project_id, status, report, files_json, now_ms(), fingerprint, note],
+        );
+    }
+
     /// After a crash or forced exit: nothing can still be running, so reconcile stored state.
     pub fn recover_interrupted(&self) {
         let c = self.c();
@@ -394,6 +526,7 @@ impl Db {
             [now_ms()],
         );
         let _ = c.execute("UPDATE tasks SET status='failed' WHERE status='running'", []);
+        let _ = c.execute("UPDATE repo_research SET status=CASE WHEN report='' THEN 'failed' ELSE 'ready' END, note='Interrupted: Mushoku Guild closed during research.' WHERE status='researching'", []);
         let _ = c.execute(
             "UPDATE tasks SET status=CASE WHEN EXISTS(SELECT 1 FROM prompt_drafts d WHERE d.task_id=tasks.id) THEN 'prompt_ready' ELSE 'draft' END WHERE status='reasoning'",
             [],
@@ -404,6 +537,12 @@ impl Db {
 const TASK_SQL_ONE: &str = "SELECT id,project_id,title,description,status,created_at,updated_at FROM tasks WHERE id=?1";
 const DRAFT_SQL_ONE: &str = "SELECT id,task_id,version,body,source,model,approved,created_at FROM prompt_drafts WHERE id=?1";
 
+fn conv_row(r: &rusqlite::Row) -> rusqlite::Result<Conversation> {
+    Ok(Conversation { id: r.get(0)?, project_id: r.get(1)?, title: r.get(2)?, updated_at: r.get(3)? })
+}
+fn msg_row(r: &rusqlite::Row) -> rusqlite::Result<ChatMessage> {
+    Ok(ChatMessage { id: r.get(0)?, conversation_id: r.get(1)?, role: r.get(2)?, body: r.get(3)?, created_at: r.get(4)? })
+}
 fn project_row(r: &rusqlite::Row) -> rusqlite::Result<Project> {
     Ok(Project { id: r.get(0)?, path: r.get(1)?, name: r.get(2)?, last_used_at: r.get(3)? })
 }
@@ -449,13 +588,55 @@ mod tests {
         assert_eq!(d.version, 1);
         db.set_status(t.id, "prompt_ready").unwrap();
         db.set_status(t.id, "approved").unwrap();
-        let e = db.start_execution(t.id, d.id, "ask_each").unwrap();
+        let e = db.start_execution(t.id, d.id, "ask_each", "ask").unwrap();
         db.set_status(t.id, "running").unwrap();
         db.add_event(e, 1, "info", "hello", "");
         db.recover_interrupted();
         assert_eq!(db.task(t.id).unwrap().status, "failed");
         assert_eq!(db.executions(t.id)[0].status, "failed");
         assert_eq!(db.events_for_latest_execution(t.id).len(), 1);
+    }
+
+    #[test]
+    fn terminal_state_is_written_once_and_exit_code_is_kept() {
+        let db = Db::open_in_memory();
+        let p = db.add_project("C:\\x", "x").unwrap();
+        let t = db.create_task(p.id, "t", "d").unwrap();
+        let d = db.add_draft(t.id, "p", "user", None).unwrap();
+        let e = db.start_execution(t.id, d.id, "ask_each", "autopilot").unwrap();
+        db.finish_execution(e, "completed", Some("ok"), Some(3), 0, None, Some(0));
+        db.finish_execution(e, "failed", None, None, 0, Some("late duplicate"), Some(1));
+        let ex = &db.executions(t.id)[0];
+        assert_eq!((ex.status.as_str(), ex.exit_code, ex.permission_mode.as_str()), ("completed", Some(0), "autopilot"));
+    }
+
+    #[test]
+    fn chat_messages_persist_in_order_and_name_the_conversation() {
+        let db = Db::open_in_memory();
+        let p = db.add_project("C:\\x", "x").unwrap();
+        assert!(db.latest_conversation(p.id).is_none());
+        let c = db.create_conversation(p.id).unwrap();
+        db.add_chat_message(c.id, "user", "Is this well architected?").unwrap();
+        db.add_chat_message(c.id, "assistant", "Let me look.").unwrap();
+        let msgs = db.chat_messages(c.id);
+        assert_eq!(msgs.iter().map(|m| m.role.as_str()).collect::<Vec<_>>(), ["user", "assistant"]);
+        assert_eq!(db.latest_conversation(p.id).unwrap().title, "Is this well architected?");
+        let c2 = db.create_conversation(p.id).unwrap();
+        assert_eq!(db.latest_conversation(p.id).unwrap().id, c2.id);
+        assert_eq!(db.chat_messages(c.id).len(), 2, "the old conversation is kept");
+    }
+
+    #[test]
+    fn failed_research_keeps_the_previous_report() {
+        let db = Db::open_in_memory();
+        let p = db.add_project("C:\\x", "x").unwrap();
+        db.research_started(p.id);
+        db.research_finished(p.id, "ready", Some("# Report"), &["src/a.rs".into()], "fp1", None);
+        db.research_started(p.id);
+        db.research_finished(p.id, "failed", None, &[], "fp2", Some("boom"));
+        let r = db.research(p.id).unwrap();
+        assert_eq!((r.status.as_str(), r.report.as_str(), r.fingerprint.as_str()), ("failed", "# Report", "fp1"));
+        assert_eq!(r.files, vec!["src/a.rs".to_string()]);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 mod approver;
+mod autopilot;
 mod chatgpt;
 mod claude;
 mod commands;
@@ -81,6 +82,14 @@ pub fn run() {
             commands::claude_pick_exe,
             commands::run_start,
             commands::run_cancel,
+            commands::run_set_autopilot,
+            commands::research_get,
+            commands::research_start,
+            commands::research_cancel,
+            commands::chat_open,
+            commands::chat_new,
+            commands::chat_send,
+            commands::chat_cancel,
             commands::permission_decide
         ])
         .build(tauri::generate_context!())

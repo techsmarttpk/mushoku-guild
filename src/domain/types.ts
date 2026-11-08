@@ -67,6 +67,8 @@ export interface Execution {
   numTurns: number | null;
   denialCount: number;
   note: string | null;
+  exitCode: number | null;
+  permissionMode: "ask" | "autopilot";
 }
 
 export interface Activity {
@@ -119,11 +121,17 @@ export type AppEvent =
   | { type: "reasoner_done"; taskId: number; generation: number; draft: Draft }
   | { type: "reasoner_failed"; taskId: number; generation: number; kind: ErrorKind; message: string }
   | { type: "task_status"; taskId: number; status: TaskStatus }
-  | { type: "run_started"; taskId: number; executionId: number }
+  | { type: "run_started"; taskId: number; executionId: number; autopilot: boolean }
+  | { type: "run_mode"; taskId: number; autopilot: boolean }
   | { type: "run_activity"; taskId: number; activity: Activity }
-  | { type: "run_permission"; taskId: number; requestId: string; toolName: string; summary: string; input: string }
+  | { type: "run_permission"; taskId: number; requestId: string; toolName: string; summary: string; input: string; reason: string | null }
   | { type: "run_permission_resolved"; requestId: string; decision: string }
-  | { type: "run_finished"; taskId: number; status: string; result: string | null; note: string | null }
+  | { type: "run_finished"; taskId: number; executionId: number; status: string; result: string | null; note: string | null; exitCode: number | null }
+  | { type: "chat_delta"; conversationId: number; generation: number; text: string }
+  | { type: "chat_done"; conversationId: number; generation: number; message: ChatMessage }
+  | { type: "chat_failed"; conversationId: number; generation: number; kind: ErrorKind; message: string }
+  | { type: "research_activity"; projectId: number; activity: Activity }
+  | { type: "research_finished"; projectId: number; research: { projectId: number; status: string; report: string; files: string[]; researchedAt: number; note: string | null } }
   | { type: "claude_rate"; fiveHour: number | null; sevenDay: number | null; status: string | null };
 
 export interface ContextInfo {
@@ -145,4 +153,34 @@ export const MODEL_LABEL: Record<ClaudeModelChoice, string> = {
 /** Unset or unknown settings mean Sonnet (the Rust side resolves it the same way). */
 export function modelChoice(setting: string | undefined): ClaudeModelChoice {
   return setting === "opus" || setting === "haiku" || setting === "default" || setting === "sonnet" ? setting : "sonnet";
+}
+
+export interface ChatMessage {
+  id: number;
+  conversationId: number;
+  role: "user" | "assistant";
+  body: string;
+  createdAt: number;
+}
+
+export interface Conversation {
+  id: number;
+  projectId: number;
+  title: string;
+  updatedAt: number;
+}
+
+export type ResearchStatus = "none" | "researching" | "ready" | "stale" | "failed" | "cancelled";
+export interface ResearchView {
+  status: ResearchStatus;
+  researchedAt: number | null;
+  files: string[];
+  report: string;
+  note: string | null;
+}
+
+export interface ChatOpen {
+  conversation: Conversation;
+  messages: ChatMessage[];
+  research: ResearchView;
 }

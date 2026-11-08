@@ -41,3 +41,10 @@ test("end states: completed celebrates, failed shows an error, cancelled returns
   const c = projectScene({ ...base, status: "cancelled" });
   assert.deepEqual([c.executor.pose, c.executor.spot, c.board], ["idle", "lounge", "cancelled"]);
 });
+
+test("repository research shows the executor reading at the desk; a chat answer shows the reasoner thinking", () => {
+  const r = projectScene({ ...base, researching: true });
+  assert.deepEqual([r.executor.pose, r.executor.spot], ["reading", "desk"]);
+  assert.equal(projectScene({ ...base, chatting: true }).reasoner.bubble, "dots");
+  assert.equal(projectScene(base).executor.pose, "idle", "nothing is shown when nothing is happening");
+});

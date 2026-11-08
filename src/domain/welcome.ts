@@ -9,7 +9,7 @@ export interface WelcomeStep {
   ms: number;
 }
 
-export const BUBBLE_CHARS = 17;
+export const BUBBLE_CHARS = 18;
 export const BUBBLE_LINES = 3;
 
 const REASONER = [

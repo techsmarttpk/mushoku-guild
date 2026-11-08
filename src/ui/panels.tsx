@@ -351,6 +351,9 @@ export function TaskView(props: {
   claudeReady: boolean;
   policy: Policy;
   onPolicy: (p: Policy) => void;
+  autopilotChoice: boolean;
+  onAutopilotChoice: (on: boolean) => void;
+  onToggleAutopilot: (on: boolean) => void;
   onGenerate: (note: string | null) => void;
   onStopReasoner: () => void;
   onApprove: (body: string) => void;
@@ -447,6 +450,25 @@ export function TaskView(props: {
               </label>
             ))}
           </fieldset>
+          <fieldset className="policy">
+            <legend>Permission mode (this quest only)</legend>
+            <label className={`radio ${!props.autopilotChoice ? "on" : ""}`}>
+              <input type="radio" name="pmode" checked={!props.autopilotChoice} onChange={() => props.onAutopilotChoice(false)} />
+              <span>
+                <strong>Ask every time</strong>
+                <small className="muted">Every permission request waits for you. Allow Once approves just that one request.</small>
+              </span>
+            </label>
+            <label className={`radio ${props.autopilotChoice ? "on" : ""}`}>
+              <input type="radio" name="pmode" checked={props.autopilotChoice} onChange={() => props.onAutopilotChoice(true)} />
+              <span>
+                <strong>Auto Pilot</strong>
+                <small className="muted">
+                  Routine Bash commands run without asking, and every one is listed in Activity. Deleting, system or registry changes, secrets, network transfers and anything outside the project still ask. It ends with this quest; edits still follow the policy above.
+                </small>
+              </span>
+            </label>
+          </fieldset>
           <div className="row">
             <button className="btn btn-primary" onClick={props.onStart} disabled={!props.claudeReady}>
               {props.claudeReady ? "Start Claude Code" : "Claude Code not ready (Guild tab)"}
@@ -470,6 +492,27 @@ export function TaskView(props: {
       )}
 
       {task.status === "running" && (
+        <div className={`mode-banner ${state.autopilot ? "on" : ""}`}>
+          {state.autopilot ? (
+            <>
+              <strong>AUTO PILOT ON</strong>
+              <span>Routine Bash commands are approved automatically (listed in Activity). Risky ones still ask. This applies to this quest only.</span>
+              <button className="btn btn-quiet" onClick={() => props.onToggleAutopilot(false)}>
+                Turn off
+              </button>
+            </>
+          ) : (
+            <>
+              <strong>Asking every time</strong>
+              <span>Each permission request waits for your decision.</span>
+              <button className="btn btn-quiet" onClick={() => props.onToggleAutopilot(true)}>
+                Turn on Auto Pilot
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {task.status === "running" && (
         <div className="row">
           <button className="btn btn-danger" onClick={props.onCancelRun}>
             Cancel execution
@@ -489,8 +532,9 @@ export function TaskView(props: {
             )}
             {lastExec && (
               <p className="muted small">
-                Policy: {POLICY_TEXT[lastExec.policy]?.name ?? lastExec.policy}
+                Policy: {POLICY_TEXT[lastExec.policy]?.name ?? lastExec.policy} · {lastExec.permissionMode === "autopilot" ? "Auto Pilot" : "asked every time"}
                 {lastExec.numTurns != null ? ` · ${lastExec.numTurns} turns` : ""}
+                {lastExec.exitCode != null ? ` · exit code ${lastExec.exitCode}` : ""}
               </p>
             )}
           </section>
@@ -559,6 +603,7 @@ const ICON: Record<string, string> = {
   tool_error: "✗",
   permission_request: "❓",
   permission_decision: "🔒",
+  permission_auto: "⚡",
   permission_denied: "⛔",
   rate_limit: "⏳",
   result: "★",
@@ -612,6 +657,7 @@ export function PermissionDialog({ request, onDecide }: { request: PermissionReq
         <p>
           Claude Code wants to use <strong>{request.toolName}</strong>:
         </p>
+        {request.reason && <div className="note">{request.reason}</div>}
         <pre className="code">{request.summary}</pre>
         <details>
           <summary>Full request</summary>

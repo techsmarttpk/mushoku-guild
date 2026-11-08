@@ -11,6 +11,10 @@ export interface SceneInput {
   permissionPending: boolean;
   /** Tool Claude has started and not yet finished (null between tools). */
   currentTool: string | null;
+  /** Claude is researching the repository (read-only). */
+  researching?: boolean;
+  /** ChatGPT is answering in Guild Chat. */
+  chatting?: boolean;
 }
 
 export type ReasonerPose = "idle" | "thinking" | "writing" | "present" | "cheer";
@@ -53,6 +57,8 @@ export const IDLE_SCENE: SceneState = {
 export function projectScene(i: SceneInput): SceneState {
   switch (i.status) {
     case null:
+      if (i.researching) return { ...IDLE_SCENE, executor: { pose: "reading", spot: "desk", bubble: "gear" }, board: "empty" };
+      if (i.chatting) return { ...IDLE_SCENE, reasoner: { pose: "thinking", spot: "lounge", bubble: "dots" } };
       return IDLE_SCENE;
     case "accepted":
       return { ...IDLE_SCENE, reasoner: { pose: "cheer", spot: "lounge", bubble: "check" }, board: "done" };

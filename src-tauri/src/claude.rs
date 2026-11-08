@@ -8,7 +8,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,7 +21,6 @@ use crate::events::{emit, hidden, truncate, Activity, AppEvent};
 
 const MIN_TESTED: (u32, u32) = (2, 1);
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
-const GRACE_AFTER_INTERRUPT: Duration = Duration::from_secs(4);
 
 #[derive(Serialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
@@ -225,16 +224,24 @@ pub fn build_args(policy: Policy, mcp_config: &Path, model: &str, max_turns: u32
     a.push(mcp_config.display().to_string());
     a.push("--tools".into());
     a.push(policy.tools().into());
-    if policy == Policy::AcceptEdits {
-        a.push("--permission-mode".into());
-        a.push("acceptEdits".into());
-    }
     if !model.trim().is_empty() {
         a.push("--model".into());
         a.push(model.trim().to_string());
     }
     a.push("--max-turns".into());
     a.push(max_turns.to_string());
+    a
+}
+
+/// Names Claude must not read during research, enforced by Claude Code itself (in addition to our redaction).
+pub const RESEARCH_DENY: &str = "Read(**/.env),Read(**/.env.*),Read(**/*.pem),Read(**/*.key),Read(**/*.p12),Read(**/*.pfx),Read(**/id_rsa*),Read(**/id_ed25519*),Read(**/*credential*),Read(**/*secret*),Read(**/.npmrc),Read(**/.netrc),Read(**/node_modules/**),Read(**/.git/**),Read(**/target/**),Read(**/dist/**)";
+
+/// Research is strictly read-only: only Read/Glob/Grep exist, anything else is denied by the approver, and
+/// secret-looking paths are blocked by deny rules.
+pub fn research_args(mcp_config: &Path, model: &str, max_turns: u32) -> Vec<String> {
+    let mut a = build_args(Policy::ReadOnly, mcp_config, model, max_turns);
+    a.push("--disallowedTools".into());
+    a.push(RESEARCH_DENY.into());
     a
 }
 
@@ -403,14 +410,110 @@ type Decision = (bool, String); // (allow, decided_by)
 #[derive(Default)]
 struct Pending(Mutex<HashMap<String, Sender<Decision>>>);
 
+/// What a Claude run is for. Quests may edit under the user's policy; research is strictly read-only.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RunKind {
+    Quest { task_id: i64, exec_id: i64 },
+    Research { project_id: i64 },
+}
+
+/// Messages from the three watchers of one process (stdout reader, exit waiter) to its supervisor.
+#[derive(Debug)]
+pub enum RunMsg {
+    /// The CLI printed its final `result` event (and how many permission denials it counted).
+    Result(Value, i64),
+    /// stdout closed without a result.
+    StreamEnd,
+    /// The process exited with this code (-1 when unknown).
+    Exit(i32),
+}
+
+#[derive(Debug, Default)]
+pub struct Resolved {
+    pub result: Option<Value>,
+    pub denials: i64,
+    pub exit_code: Option<i32>,
+    /// The process had to be killed because it did not exit after its result.
+    pub forced: bool,
+}
+
+/// Decides the outcome of one run from the watcher messages.
+///
+/// The CLI can stay alive after its final result (for example while a background server it started is still
+/// running), so the result, not the process exit, is what ends the quest. After the outcome is known the
+/// process is asked to stop (`stop_soft` closes stdin), given `grace` to exit, then `stop_hard` kills the tree.
+/// The returned value always carries the final exit code when the process ended.
+pub fn resolve_run(rx: &Receiver<RunMsg>, grace: Duration, mut stop_soft: impl FnMut(), mut stop_hard: impl FnMut()) -> Resolved {
+    let mut out = Resolved::default();
+    let mut ended = false; // stdout finished or result seen
+    // 1. wait for the outcome (no timeout: a quest may legitimately run for hours)
+    loop {
+        match rx.recv() {
+            Ok(RunMsg::Result(v, d)) => {
+                out.result = Some(v);
+                out.denials = d;
+                break;
+            }
+            Ok(RunMsg::StreamEnd) => {
+                ended = true;
+                break;
+            }
+            Ok(RunMsg::Exit(c)) => {
+                out.exit_code = Some(c);
+                // the result may still be in the pipe: give the reader a moment to deliver it
+                match rx.recv_timeout(grace) {
+                    Ok(RunMsg::Result(v, d)) => {
+                        out.result = Some(v);
+                        out.denials = d;
+                    }
+                    _ => {}
+                }
+                break;
+            }
+            Err(_) => break, // all watchers gone
+        }
+    }
+    let _ = ended;
+    // 2. make sure the process is gone, and learn its exit code
+    if out.exit_code.is_none() {
+        stop_soft();
+        let deadline = Instant::now() + grace;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(RunMsg::Exit(c)) => {
+                    out.exit_code = Some(c);
+                    break;
+                }
+                Ok(RunMsg::Result(v, d)) if out.result.is_none() => {
+                    out.result = Some(v);
+                    out.denials = d;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        if out.exit_code.is_none() {
+            out.forced = true;
+            stop_hard();
+            if let Ok(RunMsg::Exit(c)) = rx.recv_timeout(grace) {
+                out.exit_code = Some(c);
+            }
+        }
+    }
+    out
+}
+
 struct Active {
-    task_id: i64,
+    kind: RunKind,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     cancel: Arc<AtomicBool>,
     exited: Arc<AtomicBool>,
     pending: Arc<Pending>,
     job: Arc<Option<Job>>,
     pid: u32,
+    autopilot: Arc<AtomicBool>,
+    ctx: Arc<RunCtx>,
 }
 
 #[derive(Default)]
@@ -421,22 +524,33 @@ pub struct Runner {
 struct RunCtx {
     app: AppHandle,
     db: Arc<Db>,
-    task_id: i64,
-    exec_id: i64,
+    kind: RunKind,
     seq: AtomicI64,
+    project_dir: PathBuf,
+    autopilot: Arc<AtomicBool>,
+    inspected: Mutex<Vec<String>>,
+    /// Guards the single terminal event of this run.
+    finished: AtomicBool,
 }
 
 impl RunCtx {
     fn push(&self, kind: &str, title: &str, detail: &str) {
         let seq = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
-        self.db.add_event(self.exec_id, seq, kind, title, detail);
-        emit(
-            &self.app,
-            AppEvent::RunActivity {
-                task_id: self.task_id,
-                activity: Activity { seq, ts: crate::db::now_ms(), kind: kind.into(), title: title.into(), detail: detail.into() },
-            },
-        );
+        let activity = Activity { seq, ts: crate::db::now_ms(), kind: kind.into(), title: title.into(), detail: detail.into() };
+        match self.kind {
+            RunKind::Quest { task_id, exec_id } => {
+                self.db.add_event(exec_id, seq, kind, title, detail);
+                emit(&self.app, AppEvent::RunActivity { task_id, activity });
+            }
+            RunKind::Research { project_id } => emit(&self.app, AppEvent::ResearchActivity { project_id, activity }),
+        }
+    }
+
+    fn note_inspected(&self, path: &str) {
+        let mut v = self.inspected.lock().unwrap_or_else(|p| p.into_inner());
+        if v.len() < 400 && !v.iter().any(|p| p == path) {
+            v.push(path.to_string());
+        }
     }
 }
 
@@ -445,10 +559,10 @@ pub struct StartRequest {
     pub db: Arc<Db>,
     pub exe: PathBuf,
     pub project_dir: PathBuf,
-    pub task_id: i64,
-    pub exec_id: i64,
+    pub kind: RunKind,
     pub prompt: String,
     pub policy: Policy,
+    pub autopilot: bool,
     pub model: String,
     pub max_turns: u32,
     pub data_dir: PathBuf,
@@ -459,6 +573,8 @@ fn random_hex(n: usize) -> String {
     let _ = getrandom::fill(&mut b);
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
+
+const SOFT_GRACE: Duration = Duration::from_secs(3);
 
 impl Runner {
     pub fn is_running(&self) -> bool {
@@ -478,7 +594,11 @@ impl Runner {
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let token = random_hex(24);
         std::fs::create_dir_all(&req.data_dir).map_err(|e| e.to_string())?;
-        let cfg_path = req.data_dir.join(format!("run-{}.mcp.json", req.exec_id));
+        let run_id = match req.kind {
+            RunKind::Quest { exec_id, .. } => format!("q{exec_id}"),
+            RunKind::Research { project_id } => format!("r{project_id}"),
+        };
+        let cfg_path = req.data_dir.join(format!("run-{run_id}.mcp.json"));
         let self_exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let cfg = json!({"mcpServers": {"mushoku": {
             "command": self_exe.display().to_string(), "args": ["--mcp-approver"],
@@ -486,7 +606,10 @@ impl Runner {
         }}});
         std::fs::write(&cfg_path, cfg.to_string()).map_err(|e| e.to_string())?;
 
-        let args = build_args(req.policy, &cfg_path, &req.model, req.max_turns);
+        let args = match req.kind {
+            RunKind::Quest { .. } => build_args(req.policy, &cfg_path, &req.model, req.max_turns),
+            RunKind::Research { .. } => research_args(&cfg_path, &req.model, req.max_turns),
+        };
         let mut cmd = Command::new(&req.exe);
         cmd.args(&args).current_dir(&req.project_dir).env_clear().envs(clean_env_pairs()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         hidden(&mut cmd);
@@ -504,7 +627,11 @@ impl Runner {
 
         let mut stdin = child.stdin.take().ok_or("no stdin")?;
         let msg = json!({"type": "user", "message": {"role": "user", "content": req.prompt}});
-        stdin.write_all(format!("{msg}\n").as_bytes()).map_err(|e| format!("could not send the prompt: {e}"))?;
+        if let Err(e) = stdin.write_all(format!("{msg}\n").as_bytes()) {
+            kill_tree(pid);
+            let _ = std::fs::remove_file(&cfg_path);
+            return Err(format!("could not send the prompt: {e}"));
+        }
         let stdin = Arc::new(Mutex::new(Some(stdin)));
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let stderr = child.stderr.take().ok_or("no stderr")?;
@@ -512,19 +639,34 @@ impl Runner {
         let cancel = Arc::new(AtomicBool::new(false));
         let exited = Arc::new(AtomicBool::new(false));
         let pending = Arc::new(Pending::default());
-        *slot = Some(Active { task_id: req.task_id, stdin: stdin.clone(), cancel: cancel.clone(), exited: exited.clone(), pending: pending.clone(), job: job.clone(), pid });
+        let autopilot = Arc::new(AtomicBool::new(req.autopilot && matches!(req.kind, RunKind::Quest { .. })));
+        let ctx = Arc::new(RunCtx {
+            app: req.app.clone(),
+            db: req.db.clone(),
+            kind: req.kind,
+            seq: AtomicI64::new(0),
+            project_dir: req.project_dir.clone(),
+            autopilot: autopilot.clone(),
+            inspected: Mutex::new(Vec::new()),
+            finished: AtomicBool::new(false),
+        });
+        *slot = Some(Active { kind: req.kind, stdin: stdin.clone(), cancel: cancel.clone(), exited: exited.clone(), pending: pending.clone(), job: job.clone(), pid, autopilot: autopilot.clone(), ctx: ctx.clone() });
         drop(slot);
 
-        let ctx = Arc::new(RunCtx { app: req.app.clone(), db: req.db.clone(), task_id: req.task_id, exec_id: req.exec_id, seq: AtomicI64::new(0) });
         if job.is_none() {
             ctx.push("info", "Process cleanup", "Windows job object unavailable; falling back to taskkill for cleanup.");
         }
-        emit(&req.app, AppEvent::RunStarted { task_id: req.task_id, execution_id: req.exec_id });
+        if let RunKind::Quest { task_id, exec_id } = req.kind {
+            emit(&req.app, AppEvent::RunStarted { task_id, execution_id: exec_id, autopilot: autopilot.load(Ordering::SeqCst) });
+            if autopilot.load(Ordering::SeqCst) {
+                ctx.push("info", "Auto Pilot is ON for this quest", "Routine Bash commands are approved automatically. Risky commands and everything else still ask. Cancel any time.");
+            }
+        }
 
         // approval server
         let stop = Arc::new(AtomicBool::new(false));
         {
-            let (ctx, pending, token, stop, policy) = (ctx.clone(), pending.clone(), token.clone(), stop.clone(), req.policy);
+            let (ctx, pending, token, stop, policy) = (ctx.clone(), pending.clone(), token.clone(), stop.clone(), if matches!(req.kind, RunKind::Research { .. }) { Policy::ReadOnly } else { req.policy });
             std::thread::spawn(move || serve_approvals(listener, ctx, pending, token, stop, policy));
         }
         // stderr tail
@@ -545,51 +687,42 @@ impl Runner {
                 }
             });
         }
-        // stdout reader
-        let (done_tx, done_rx) = channel::<(Option<Value>, i64)>();
+        // watchers -> supervisor
+        let (tx, rx) = channel::<RunMsg>();
         {
-            let (ctx, stdin) = (ctx.clone(), stdin.clone());
-            std::thread::spawn(move || read_stream(stdout, ctx, stdin, done_tx));
+            let (ctx, stdin, tx) = (ctx.clone(), stdin.clone(), tx.clone());
+            std::thread::spawn(move || read_stream(stdout, ctx, stdin, tx));
         }
-        // supervisor
+        {
+            let (exited, tx) = (exited.clone(), tx);
+            std::thread::spawn(move || {
+                let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
+                exited.store(true, Ordering::SeqCst);
+                let _ = tx.send(RunMsg::Exit(code));
+            });
+        }
+        // supervisor: exactly one terminal outcome per run
         let me = self.clone();
         std::thread::spawn(move || {
-            let _ = child.wait();
-            exited.store(true, Ordering::SeqCst);
+            let (s_stdin, s_job) = (stdin.clone(), job.clone());
+            let resolved = resolve_run(
+                &rx,
+                SOFT_GRACE,
+                || *s_stdin.lock().unwrap_or_else(|p| p.into_inner()) = None, // closing stdin lets the CLI exit
+                || match s_job.as_ref() {
+                    Some(j) => j.terminate(),
+                    None => kill_tree(pid),
+                },
+            );
             if let Some(j) = job.as_ref() {
-                j.terminate(); // sweep anything the tool calls left behind
+                j.terminate(); // sweep anything the tool calls left behind (e.g. background servers)
             }
-            let (result, denials) = done_rx.recv_timeout(Duration::from_secs(5)).unwrap_or((None, 0));
             stop.store(true, Ordering::SeqCst);
             pending.deny_all("run ended");
             let _ = std::fs::remove_file(&cfg_path);
-            let was_cancelled = cancel.load(Ordering::SeqCst);
-            let (mut status, mut note) = final_status(was_cancelled, result.as_ref());
-            if result.is_none() && !was_cancelled {
-                let tail = err_tail.lock().unwrap_or_else(|p| p.into_inner()).trim().to_string();
-                if !tail.is_empty() {
-                    note = Some(format!("Claude Code ended without a result. Its error output: {}", truncate(&tail, 600)));
-                }
-            }
-            if result.as_ref().map(|r| r["is_error"].as_bool().unwrap_or(false)) == Some(false) && !was_cancelled {
-                status = "completed";
-            }
-            let result_text = result.as_ref().and_then(|r| r["result"].as_str()).map(String::from);
-            let turns = result.as_ref().and_then(|r| r["num_turns"].as_i64());
-            ctx.push(
-                if status == "completed" { "result" } else if status == "cancelled" { "cancelled" } else { "error" },
-                match status {
-                    "completed" => "Execution completed",
-                    "cancelled" => "Execution cancelled",
-                    _ => "Execution failed",
-                },
-                note.as_deref().or(result_text.as_deref()).unwrap_or(""),
-            );
-            ctx.db.finish_execution(ctx.exec_id, status, result_text.as_deref(), turns, denials, note.as_deref());
-            let _ = ctx.db.set_status(ctx.task_id, status);
+            let tail = err_tail.lock().unwrap_or_else(|p| p.into_inner()).trim().to_string();
+            finish_run(&ctx, &resolved, cancel.load(Ordering::SeqCst), &tail);
             *me.active.lock().unwrap_or_else(|p| p.into_inner()) = None;
-            emit(&ctx.app, AppEvent::TaskStatus { task_id: ctx.task_id, status: status.into() });
-            emit(&ctx.app, AppEvent::RunFinished { task_id: ctx.task_id, status: status.into(), result: result_text, note });
         });
         Ok(())
     }
@@ -611,10 +744,10 @@ impl Runner {
         let (exited, stdin, job, pid) = (a.exited.clone(), a.stdin.clone(), a.job.clone(), a.pid);
         std::thread::spawn(move || {
             let start = Instant::now();
-            while !exited.load(Ordering::SeqCst) && start.elapsed() < GRACE_AFTER_INTERRUPT {
+            while !exited.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(4) {
                 std::thread::sleep(Duration::from_millis(100));
             }
-            *stdin.lock().unwrap_or_else(|p| p.into_inner()) = None; // closing stdin lets a graceful exit finish
+            *stdin.lock().unwrap_or_else(|p| p.into_inner()) = None;
             std::thread::sleep(Duration::from_millis(500));
             if !exited.load(Ordering::SeqCst) {
                 match job.as_ref() {
@@ -631,8 +764,33 @@ impl Runner {
         guard.as_ref().map(|a| a.pending.resolve(request_id, allow, "user")).unwrap_or(false)
     }
 
+    /// Turns Auto Pilot on or off for the running quest. Takes effect for the next permission request.
+    pub fn set_autopilot(&self, on: bool) -> bool {
+        let guard = self.active.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(a) = guard.as_ref() else { return false };
+        let RunKind::Quest { task_id, .. } = a.kind else { return false };
+        a.autopilot.store(on, Ordering::SeqCst);
+        a.ctx.push(
+            "info",
+            if on { "Auto Pilot turned ON" } else { "Auto Pilot turned OFF" },
+            if on { "Routine Bash commands are approved automatically from now on." } else { "Every permission request will ask you again." },
+        );
+        emit(&a.ctx.app, AppEvent::RunMode { task_id, autopilot: on });
+        true
+    }
+
     pub fn active_task(&self) -> Option<i64> {
-        self.active.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|a| a.task_id)
+        match self.active.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|a| a.kind) {
+            Some(RunKind::Quest { task_id, .. }) => Some(task_id),
+            _ => None,
+        }
+    }
+
+    pub fn active_research(&self) -> Option<i64> {
+        match self.active.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|a| a.kind) {
+            Some(RunKind::Research { project_id }) => Some(project_id),
+            _ => None,
+        }
     }
 
     /// Called when the app is closing: nothing may outlive Mushoku Guild.
@@ -662,10 +820,53 @@ impl Pending {
     }
 }
 
-fn read_stream(stdout: std::process::ChildStdout, ctx: Arc<RunCtx>, stdin: Arc<Mutex<Option<ChildStdin>>>, done: Sender<(Option<Value>, i64)>) {
+/// Writes the single terminal state of a run and tells the UI. Safe against duplicates.
+fn finish_run(ctx: &RunCtx, resolved: &Resolved, was_cancelled: bool, stderr_tail: &str) {
+    if ctx.finished.swap(true, Ordering::SeqCst) {
+        return; // a terminal event was already sent for this run
+    }
+    let (status, mut note) = final_status(was_cancelled, resolved.result.as_ref());
+    if resolved.result.is_none() && !was_cancelled {
+        let code = resolved.exit_code.map(|c| format!(" (exit code {c})")).unwrap_or_default();
+        note = Some(if stderr_tail.is_empty() { format!("Claude Code ended without producing a result{code}.") } else { format!("Claude Code ended without producing a result{code}. Its error output: {}", truncate(stderr_tail, 600)) });
+    }
+    let result_text = resolved.result.as_ref().and_then(|r| r["result"].as_str()).map(String::from);
+    let turns = resolved.result.as_ref().and_then(|r| r["num_turns"].as_i64());
+    let title = match (status, ctx.kind) {
+        ("completed", RunKind::Research { .. }) => "Research completed",
+        ("completed", _) => "Execution completed",
+        ("cancelled", RunKind::Research { .. }) => "Research cancelled",
+        ("cancelled", _) => "Execution cancelled",
+        (_, RunKind::Research { .. }) => "Research failed",
+        _ => "Execution failed",
+    };
+    let exit = resolved.exit_code.map(|c| format!("exit code {c}")).unwrap_or_else(|| "exit code unknown".into());
+    let detail = format!("{}{}", note.as_deref().or(result_text.as_deref()).map(|t| truncate(t, 1500)).unwrap_or_default(), if resolved.forced { format!("\n({exit}; the process had to be stopped after finishing)") } else { format!("\n({exit})") });
+    ctx.push(if status == "completed" { "result" } else if status == "cancelled" { "cancelled" } else { "error" }, title, detail.trim());
+    match ctx.kind {
+        RunKind::Quest { task_id, exec_id } => {
+            ctx.db.finish_execution(exec_id, status, result_text.as_deref(), turns, resolved.denials, note.as_deref(), resolved.exit_code.map(i64::from));
+            let _ = ctx.db.set_status(task_id, status);
+            emit(&ctx.app, AppEvent::TaskStatus { task_id, status: status.into() });
+            emit(&ctx.app, AppEvent::RunFinished { task_id, execution_id: exec_id, status: status.into(), result: result_text, note, exit_code: resolved.exit_code });
+        }
+        RunKind::Research { project_id } => {
+            let files = ctx.inspected.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let fp = crate::project_context::fingerprint(&ctx.project_dir);
+            let report = (status == "completed").then(|| crate::project_context::redact(result_text.as_deref().unwrap_or("")));
+            let report = report.filter(|r| !r.trim().is_empty());
+            let final_state = if status == "completed" && report.is_none() { "failed" } else if status == "completed" { "ready" } else { status };
+            let n = if final_state == "failed" && report.is_none() && status == "completed" { Some("Claude finished without writing a report.".to_string()) } else { note };
+            ctx.db.research_finished(project_id, final_state, report.as_deref(), &files, &fp, n.as_deref());
+            if let Some(r) = ctx.db.research(project_id) {
+                emit(&ctx.app, AppEvent::ResearchFinished { project_id, research: r });
+            }
+        }
+    }
+}
+
+fn read_stream(stdout: std::process::ChildStdout, ctx: Arc<RunCtx>, stdin: Arc<Mutex<Option<ChildStdin>>>, tx: Sender<RunMsg>) {
     let mut tools: HashMap<String, String> = HashMap::new();
-    let mut result: Option<Value> = None;
-    let mut denials = 0i64;
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
     loop {
@@ -691,18 +892,22 @@ fn read_stream(stdout: std::process::ChildStdout, ctx: Arc<RunCtx>, stdin: Arc<M
                 }
             }
             ("result", _) => {
-                denials = ev["permission_denials"].as_array().map(|a| a.len() as i64).unwrap_or(0);
-                result = Some(ev);
+                let denials = ev["permission_denials"].as_array().map(|a| a.len() as i64).unwrap_or(0);
                 *stdin.lock().unwrap_or_else(|p| p.into_inner()) = None; // done: closing stdin lets the CLI exit
+                let _ = tx.send(RunMsg::Result(ev, denials));
+                // keep draining so the CLI never blocks on a full pipe while it shuts down
             }
             _ => {
                 for n in normalize(&ev, &mut tools) {
+                    if n.kind == "tool_use" && matches!(n.title.as_str(), "Read") {
+                        ctx.note_inspected(&n.detail);
+                    }
                     ctx.push(n.kind, &n.title, &n.detail);
                 }
             }
         }
     }
-    let _ = done.send((result, denials));
+    let _ = tx.send(RunMsg::StreamEnd);
 }
 
 fn serve_approvals(listener: TcpListener, ctx: Arc<RunCtx>, pending: Arc<Pending>, token: String, stop: Arc<AtomicBool>, policy: Policy) {
@@ -737,23 +942,61 @@ fn handle_approval(mut s: TcpStream, ctx: Arc<RunCtx>, pending: Arc<Pending>, to
     let tool = req["tool_name"].as_str().unwrap_or("tool").to_string();
     let input = req["input"].clone();
     let summary = summarize_input(&tool, &input);
+    let exec_id = match ctx.kind {
+        RunKind::Quest { exec_id, .. } => Some(exec_id),
+        RunKind::Research { .. } => None,
+    };
+    let record = |decision: &str, by: &str| {
+        if let Some(e) = exec_id {
+            ctx.db.add_approval(e, &tool, &summary, decision, by);
+        }
+    };
     if policy == Policy::ReadOnly {
-        ctx.db.add_approval(ctx.exec_id, &tool, &summary, "deny", "policy");
+        record("deny", "policy");
         ctx.push("permission_decision", &format!("Blocked by read-only policy: {tool}"), &summary);
-        reply(&mut s, false, &input, "Denied: this run uses the read-only policy.");
+        reply(&mut s, false, &input, "Denied: this run is read-only.");
         return;
+    }
+    // "Allow edits" policy, enforced here (not by Claude's acceptEdits mode, which would also allow rm/mv silently):
+    // edits of ordinary files inside the project are approved; everything else keeps asking.
+    if policy == Policy::AcceptEdits && matches!(tool.as_str(), "Edit" | "Write" | "NotebookEdit") {
+        let path = input["file_path"].as_str().or_else(|| input["notebook_path"].as_str()).unwrap_or("");
+        let name = path.rsplit(['/', '\\']).next().unwrap_or("");
+        if crate::autopilot::path_inside(&ctx.project_dir, path) && !crate::project_context::is_sensitive_name(name) {
+            record("allow", "policy");
+            ctx.push("permission_auto", &format!("Auto-approved edit: {tool}"), &format!("{summary}\n(policy: allow edits inside the project)"));
+            reply(&mut s, true, &input, "");
+            return;
+        }
+    }
+    // Auto Pilot: only ordinary Bash commands, only while ON for this quest, never anything the classifier doubts.
+    let mut reason: Option<String> = None;
+    if ctx.autopilot.load(Ordering::SeqCst) && tool == "Bash" {
+        match crate::autopilot::classify(input["command"].as_str().unwrap_or(""), &ctx.project_dir) {
+            crate::autopilot::Verdict::Safe => {
+                record("allow", "autopilot");
+                ctx.push("permission_auto", "Auto-approved: Bash", &format!("{summary}\n(Auto Pilot)"));
+                reply(&mut s, true, &input, "");
+                return;
+            }
+            crate::autopilot::Verdict::NeedsApproval(r) => reason = Some(format!("Auto Pilot paused: this command {r}.")),
+        }
     }
     let id = random_hex(8);
     let (tx, rx) = channel::<Decision>();
     pending.0.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone(), tx);
-    ctx.push("permission_request", &format!("Permission needed: {tool}"), &summary);
-    emit(&ctx.app, AppEvent::RunPermission { task_id: ctx.task_id, request_id: id.clone(), tool_name: tool.clone(), summary: summary.clone(), input: truncate(&serde_json::to_string_pretty(&input).unwrap_or_default(), 4000) });
+    let RunKind::Quest { task_id, .. } = ctx.kind else { return };
+    ctx.push("permission_request", &format!("Permission needed: {tool}"), &match &reason {
+        Some(r) => format!("{summary}\n{r}"),
+        None => summary.clone(),
+    });
+    emit(&ctx.app, AppEvent::RunPermission { task_id, request_id: id.clone(), tool_name: tool.clone(), summary: summary.clone(), input: truncate(&serde_json::to_string_pretty(&input).unwrap_or_default(), 4000), reason });
     let (allow, by) = rx.recv_timeout(APPROVAL_TIMEOUT).unwrap_or_else(|_| {
         pending.0.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
         (false, "timeout".into())
     });
     let decision = if allow { "allow" } else { "deny" };
-    ctx.db.add_approval(ctx.exec_id, &tool, &summary, decision, &by);
+    record(decision, &by);
     ctx.push("permission_decision", &format!("{} {tool}", if allow { "Allowed" } else { "Denied" }), &format!("{summary} (decided by {by})"));
     emit(&ctx.app, AppEvent::RunPermissionResolved { request_id: id, decision: decision.into() });
     reply(&mut s, allow, &input, &format!("Denied by the user in Mushoku Guild ({by})."));
@@ -775,7 +1018,8 @@ mod tests {
         let ro = build_args(Policy::ReadOnly, Path::new("c"), "", 5);
         assert!(ro.contains(&"Read,Glob,Grep".to_string()) && !ro.contains(&"--permission-mode".to_string()));
         let ae = build_args(Policy::AcceptEdits, Path::new("c"), "haiku", 5);
-        assert!(ae.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]) && ae.windows(2).any(|w| w == ["--model", "haiku"]));
+        assert!(!ae.contains(&"--permission-mode".to_string()), "never delegate to Claude's own acceptEdits mode");
+        assert!(ae.windows(2).any(|w| w == ["--model", "haiku"]));
     }
 
     #[test]
@@ -826,6 +1070,71 @@ mod tests {
         assert!(with.windows(2).any(|w| w == ["--model", "haiku"]));
         let without = build_args(Policy::AskEach, Path::new("c"), resolve_model(Some("default")).unwrap_or(""), 5);
         assert!(!without.contains(&"--model".to_string()));
+    }
+
+    #[test]
+    fn research_mode_is_read_only_and_blocks_secret_paths() {
+        let a = research_args(Path::new("c"), "sonnet", 40);
+        let tools = a.iter().position(|x| x == "--tools").map(|i| a[i + 1].clone()).unwrap();
+        assert_eq!(tools, "Read,Glob,Grep", "no Bash, Edit or Write tool may exist in research");
+        assert!(!a.iter().any(|x| x.contains("dangerously") || x == "acceptEdits" || x == "--permission-mode"));
+        let deny = a.iter().position(|x| x == "--disallowedTools").map(|i| a[i + 1].clone()).unwrap();
+        for p in [".env", "*.pem", "id_rsa", "node_modules", ".git"] {
+            assert!(deny.contains(p), "{p}");
+        }
+        assert!(a.contains(&"--strict-mcp-config".to_string()));
+    }
+
+    fn feed(msgs: Vec<RunMsg>) -> Receiver<RunMsg> {
+        let (tx, rx) = channel();
+        for m in msgs {
+            tx.send(m).unwrap();
+        }
+        rx
+    }
+    const G: Duration = Duration::from_millis(60);
+
+    #[test]
+    fn result_ends_the_run_even_if_the_process_lingers_and_it_is_then_stopped() {
+        // the CLI printed its result but a background server keeps it alive: soft stop first, then the exit arrives
+        let (tx, rx) = channel();
+        tx.send(RunMsg::Result(json!({"is_error": false, "result": "launched"}), 0)).unwrap();
+        let soft = std::cell::Cell::new(0);
+        let hard = std::cell::Cell::new(0);
+        let tx2 = tx.clone();
+        let r = resolve_run(&rx, G, || { soft.set(soft.get() + 1); tx2.send(RunMsg::Exit(0)).unwrap(); }, || hard.set(hard.get() + 1));
+        assert_eq!((soft.get(), hard.get()), (1, 0));
+        assert_eq!(r.exit_code, Some(0));
+        assert_eq!(final_status(false, r.result.as_ref()).0, "completed");
+    }
+
+    #[test]
+    fn a_process_that_ignores_stdin_close_is_force_stopped_and_still_reaches_a_terminal_state() {
+        let (tx, rx) = channel();
+        tx.send(RunMsg::Result(json!({"is_error": false, "result": "ok"}), 2)).unwrap();
+        let tx2 = tx.clone();
+        let r = resolve_run(&rx, G, || {}, || tx2.send(RunMsg::Exit(1)).unwrap());
+        assert!(r.forced);
+        assert_eq!((r.exit_code, r.denials), (Some(1), 2));
+        assert_eq!(final_status(false, r.result.as_ref()).0, "completed", "denials and a forced stop do not turn a finished result into a failure");
+    }
+
+    #[test]
+    fn process_death_without_a_result_is_a_failure_with_its_exit_code() {
+        let r = resolve_run(&feed(vec![RunMsg::Exit(137), RunMsg::StreamEnd]), G, || {}, || {});
+        assert_eq!(r.exit_code, Some(137));
+        assert_eq!(final_status(false, r.result.as_ref()).0, "failed");
+        let r = resolve_run(&feed(vec![RunMsg::StreamEnd, RunMsg::Exit(1)]), G, || {}, || {});
+        assert_eq!((r.exit_code, final_status(false, None).0), (Some(1), "failed"));
+    }
+
+    #[test]
+    fn a_late_result_after_exit_is_still_used_and_cancel_wins_over_failure() {
+        let aborted = json!({"is_error": true, "terminal_reason": "aborted_streaming", "result": ""});
+        let r = resolve_run(&feed(vec![RunMsg::Exit(1), RunMsg::Result(aborted, 0)]), G, || {}, || {});
+        assert!(r.result.is_some());
+        assert_eq!(final_status(true, r.result.as_ref()).0, "cancelled");
+        assert_eq!(final_status(false, r.result.as_ref()).0, "failed");
     }
 
     #[test]

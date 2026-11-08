@@ -30,6 +30,8 @@ try {
   say("claude ready: " + (await c.waitFor("[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Start Claude Code') && !b.disabled)", 90000)));
   await c.screenshot(`${out}/1-approved.png`);
   if (mode === "read_only") await c.click("Read-only");
+  if (mode === "autopilot") await c.evaluate("document.querySelector('input[name=pmode]:nth-of-type(1)') && [...document.querySelectorAll('input[name=pmode]')][1].click()");
+  if (mode === "autopilot") say("auto pilot chosen: " + (await c.evaluate("[...document.querySelectorAll('input[name=pmode]')][1].checked")));
   await c.click("Start Claude Code");
   await new Promise((r) => setTimeout(r, 1500));
   say("after start errors: " + JSON.stringify(c.errors.slice(0, 3)));

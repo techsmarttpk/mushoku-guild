@@ -376,3 +376,10 @@ Facts future sessions must not rediscover. Evidence and numbers: `docs/architect
 - Claude may decline prompts that look pointless (a bare `ping -n 90`); that is model behaviour, not an app failure.
 - Testing aid: `--features dev-seed` seeds a task from env vars; `tools/e2e/` drives the real app through the WebView2 debug port (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=N`).
 - Open: OpenAI terms/licence review, Anthropic third-party subscription policy, project licence, code signing, 8 h soak, single-instance, CI and lint tooling.
+
+## 18. Sprint 2 learned facts (2026-11-08)
+- Claude Code does not exit after its final `result` while a background tool is alive; the result, not the exit, must end a quest. Servers started by a quest are stopped when the quest ends (Job Object).
+- Claude's `acceptEdits` permission mode auto-allows `rm`, `mv`, `mkdir` and similar without calling `--permission-prompt-tool`; do not use it where shell commands must stay behind the approver.
+- Claude Code auto-allows some read-only commands itself (for example `node -v`); the approver only sees what the CLI chooses to ask about.
+- Research mode works with `--tools Read,Glob,Grep` plus the approver in read-only policy; `--disallowedTools` path rules are a second fence, redaction a third.
+- Open: Auto Pilot classifier is a conservative denylist, not a sandbox; no OS-level isolation; research cost/limits on very large repositories untested.

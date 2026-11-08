@@ -2,7 +2,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::db::Draft;
+use crate::db::{ChatMessage, Draft, Research};
 
 /// Error taxonomy shared by both providers.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -49,11 +49,18 @@ pub enum AppEvent {
     ReasonerDone { task_id: i64, generation: u64, draft: Draft },
     ReasonerFailed { task_id: i64, generation: u64, kind: ErrorKind, message: String },
     TaskStatus { task_id: i64, status: String },
-    RunStarted { task_id: i64, execution_id: i64 },
+    RunStarted { task_id: i64, execution_id: i64, autopilot: bool },
+    RunMode { task_id: i64, autopilot: bool },
     RunActivity { task_id: i64, activity: Activity },
-    RunPermission { task_id: i64, request_id: String, tool_name: String, summary: String, input: String },
+    RunPermission { task_id: i64, request_id: String, tool_name: String, summary: String, input: String, reason: Option<String> },
     RunPermissionResolved { request_id: String, decision: String },
-    RunFinished { task_id: i64, status: String, result: Option<String>, note: Option<String> },
+    /// Exactly one per execution: the outcome and the final process exit code.
+    RunFinished { task_id: i64, execution_id: i64, status: String, result: Option<String>, note: Option<String>, exit_code: Option<i32> },
+    ChatDelta { conversation_id: i64, generation: u64, text: String },
+    ChatDone { conversation_id: i64, generation: u64, message: ChatMessage },
+    ChatFailed { conversation_id: i64, generation: u64, kind: ErrorKind, message: String },
+    ResearchActivity { project_id: i64, activity: Activity },
+    ResearchFinished { project_id: i64, research: Research },
     ClaudeRate { five_hour: Option<f64>, seven_day: Option<f64>, status: Option<String> },
 }
 

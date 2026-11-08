@@ -5,12 +5,13 @@ import { projectScene } from "./domain/scene.ts";
 import { initialState, reduce } from "./domain/store.ts";
 import { MODEL_LABEL, modelChoice, type Model, type Policy, type Project, type ProviderError, type Task } from "./domain/types.ts";
 import { api, onAppEvent, onWindowMinimized, toProviderError } from "./ipc.ts";
+import { ChatPanel } from "./ui/ChatPanel.tsx";
 import { ActivityFeed, ErrorNote, GuildPanel, HistoryList, NewTask, PermissionDialog, TaskView } from "./ui/panels.tsx";
 
 /** One greeting per application launch; React re-renders and effect re-runs cannot repeat it. */
 const welcomeGate = createWelcomeGate();
 
-type Tab = "quest" | "guild" | "log";
+type Tab = "quest" | "chat" | "guild" | "log";
 
 export function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
@@ -19,6 +20,8 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [authError, setAuthError] = useState<ProviderError | null>(null);
   const [policy, setPolicy] = useState<Policy>("ask_each");
+  /** Per-quest choice, always starts as 'ask every time': Auto Pilot is never enabled silently. */
+  const [autopilotChoice, setAutopilotChoice] = useState(false);
   const [scale, setScale] = useState(2);
   const hostRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -132,8 +135,8 @@ export function App() {
   }, []);
 
   const sceneState = useMemo(
-    () => projectScene({ status, streaming: state.streaming, permissionPending: state.permissions.length > 0, currentTool: state.currentTool }),
-    [status, state.streaming, state.permissions.length, state.currentTool],
+    () => projectScene({ status, streaming: state.streaming, permissionPending: state.permissions.length > 0, currentTool: state.currentTool, researching: state.research?.status === "researching", chatting: state.chatStreaming }),
+    [status, state.streaming, state.permissions.length, state.currentTool, state.research?.status, state.chatStreaming],
   );
   useEffect(() => {
     sceneRef.current?.setState(sceneState);
@@ -214,7 +217,62 @@ export function App() {
     run("start", async () => {
       const d = state.detail;
       if (!d) return;
-      await api.runStart(d.task.id, policy);
+      await api.runStart(d.task.id, policy, autopilotChoice);
+      setAutopilotChoice(false); // the choice belongs to this quest only
+    });
+
+  // Rust is the source of truth for a running quest: re-read it periodically while the UI shows "running", so a
+  // missed event can never leave the panel stuck on "Claude Code is working".
+  useEffect(() => {
+    const id = state.selectedTaskId;
+    if (id === null || status !== "running") return;
+    const t = setInterval(() => {
+      void api.taskGet(id).then(
+        (detail) => {
+          if (detail.task.status !== "running") dispatch({ type: "select_task", detail });
+        },
+        () => undefined,
+      );
+    }, 5000);
+    return () => clearInterval(t);
+  }, [state.selectedTaskId, status]);
+
+  // ---- Guild Chat
+  const openChat = useCallback(async (projectId: number | null) => {
+    if (projectId === null) return;
+    try {
+      const c = await api.chatOpen(projectId);
+      dispatch({ type: "chat_opened", conversation: c.conversation, messages: c.messages, research: c.research });
+    } catch (e) {
+      dispatch({ type: "patch", patch: { chatError: toProviderError(e) } });
+    }
+  }, []);
+  useEffect(() => {
+    void openChat(state.currentProjectId);
+  }, [state.currentProjectId, openChat]);
+  // while research runs, poll its status so a stopped or restarted app can never show it as running forever
+  useEffect(() => {
+    const pid = state.currentProjectId;
+    if (pid === null || state.research?.status !== "researching") return;
+    const t = setInterval(() => {
+      void api.researchGet(pid).then((r) => dispatch({ type: "patch", patch: { research: r } }), () => undefined);
+    }, 4000);
+    return () => clearInterval(t);
+  }, [state.currentProjectId, state.research?.status]);
+
+  const sendChat = (text: string) =>
+    run("chat", async () => {
+      const conv = state.conversation;
+      if (!conv) return;
+      const generation = await api.chatSend(conv.id, text);
+      const now = Date.now();
+      dispatch({ type: "chat_sending", generation, message: { id: -now, conversationId: conv.id, role: "user", body: text, createdAt: now } });
+    });
+  const startResearch = () =>
+    run("research", async () => {
+      if (state.currentProjectId === null) return;
+      dispatch({ type: "patch", patch: { researchActivity: [] } });
+      dispatch({ type: "patch", patch: { research: await api.researchStart(state.currentProjectId) } });
     });
 
   // refresh the stored detail once a run or generation finishes (adds drafts/executions to the view)
@@ -264,9 +322,9 @@ export function App() {
       <header className="top">
         <h1>Mushoku Guild</h1>
         <nav className="tabs" role="tablist">
-          {(["quest", "guild", "log"] as const).map((t) => (
+          {(["quest", "chat", "guild", "log"] as const).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={`tab ${tab === t ? "on" : ""}`} onClick={() => setTab(t)}>
-              {t === "quest" ? "Quest" : t === "guild" ? "Guild" : "Log"}
+              {t === "quest" ? "Quest" : t === "chat" ? "Chat" : t === "guild" ? "Guild" : "Log"}
               {t === "guild" && (!state.chatgpt.connected || !claudeReady) && <span className="dot" title="Setup needed" />}
             </button>
           ))}
@@ -287,12 +345,21 @@ export function App() {
             </div>
           </div>
           <div className="activity panel">
-            <h2 className="panel-title">Activity {status && <small>· {state.detail?.task.title}</small>}</h2>
-            <ActivityFeed items={state.activity} empty="Nothing has happened yet. When Claude Code works, every message, tool call and permission request appears here." />
+            {tab === "chat" ? (
+              <>
+                <h2 className="panel-title">Research activity {state.research?.status === "researching" && <small>· Claude is reading the repository</small>}</h2>
+                <ActivityFeed items={state.researchActivity} empty="When you press Ask Claude for Context, every file Claude reads appears here (read-only)." />
+              </>
+            ) : (
+              <>
+                <h2 className="panel-title">Activity {status && <small>· {state.detail?.task.title}</small>}</h2>
+                <ActivityFeed items={state.activity} empty="Nothing has happened yet. When Claude Code works, every message, tool call and permission request appears here." />
+              </>
+            )}
           </div>
         </section>
 
-        <section className="right panel">
+        <section className={`right panel ${tab === "chat" ? "wide" : ""}`}>
           {state.dbNote && <div className="note">{state.dbNote}</div>}
           {tab === "guild" && (
             <GuildPanel
@@ -368,6 +435,9 @@ export function App() {
                     claudeReady={claudeReady}
                     policy={policy}
                     onPolicy={setPolicy}
+                    autopilotChoice={autopilotChoice}
+                    onAutopilotChoice={setAutopilotChoice}
+                    onToggleAutopilot={(on) => void api.runSetAutopilot(on).catch(fail)}
                     onGenerate={(note) => void generate(state.detail?.task.id ?? 0, note)}
                     onStopReasoner={() => void api.reasonerCancel()}
                     onApprove={(b) => void approve(b)}
@@ -381,6 +451,26 @@ export function App() {
                 </>
               )}
             </div>
+          )}
+
+          {tab === "chat" && (
+            <ChatPanel
+              state={state}
+              projectName={project?.name ?? null}
+              connected={state.chatgpt.connected}
+              claudeReady={claudeReady}
+              onSend={(t) => void sendChat(t)}
+              onStop={() => void api.chatCancel()}
+              onNew={() =>
+                void run("chat", async () => {
+                  if (state.currentProjectId === null) return;
+                  const c = await api.chatNew(state.currentProjectId);
+                  dispatch({ type: "chat_opened", conversation: c.conversation, messages: c.messages, research: c.research });
+                })
+              }
+              onResearch={() => void startResearch()}
+              onCancelResearch={() => void api.researchCancel()}
+            />
           )}
 
           {tab === "log" && (

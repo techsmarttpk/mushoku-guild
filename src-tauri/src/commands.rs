@@ -10,8 +10,8 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::chatgpt::{ChatGpt, ChatGptStatus, Model};
-use crate::claude::{self, ClaudeInfo, Policy, Runner, StartRequest};
-use crate::db::{Db, Draft, Project, Task, TaskDetail};
+use crate::claude::{self, ClaudeInfo, Policy, RunKind, Runner, StartRequest};
+use crate::db::{ChatMessage, Conversation, Db, Draft, Project, Research, Task, TaskDetail};
 use crate::project_context::{ContextCache, ContextInfo};
 use crate::events::{emit, AppEvent, ErrorKind, ProviderError};
 
@@ -23,6 +23,8 @@ pub struct AppState {
     pub contexts: Arc<ContextCache>,
     generation: AtomicU64,
     gen_cancel: Mutex<Option<(i64, Arc<AtomicBool>)>>,
+    chat_gen: AtomicU64,
+    chat_cancel: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -35,6 +37,8 @@ impl AppState {
             contexts: Arc::new(ContextCache::default()),
             generation: AtomicU64::new(0),
             gen_cancel: Mutex::new(None),
+            chat_gen: AtomicU64::new(0),
+            chat_cancel: Mutex::new(None),
         }
     }
 }
@@ -341,7 +345,7 @@ pub async fn claude_pick_exe(app: AppHandle, state: State<'_, AppState>) -> R<Op
 }
 
 #[tauri::command]
-pub fn run_start(app: AppHandle, state: State<'_, AppState>, task_id: i64, policy: String) -> R<()> {
+pub fn run_start(app: AppHandle, state: State<'_, AppState>, task_id: i64, policy: String, autopilot: bool) -> R<()> {
     let policy = Policy::parse(&policy).ok_or_else(|| e(ErrorKind::Other, "Choose an execution policy."))?;
     let task = state.db.task(task_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown task"))?;
     if task.status != "approved" {
@@ -357,7 +361,10 @@ pub fn run_start(app: AppHandle, state: State<'_, AppState>, task_id: i64, polic
         Policy::AskEach => "ask_each",
         Policy::AcceptEdits => "accept_edits",
     };
-    let exec_id = state.db.start_execution(task_id, draft.id, policy_name).map_err(|m| e(ErrorKind::Other, m))?;
+    if state.runner.is_running() {
+        return Err(e(ErrorKind::Other, "Another Claude Code run is in progress. Wait for it to finish first."));
+    }
+    let exec_id = state.db.start_execution(task_id, draft.id, policy_name, if autopilot { "autopilot" } else { "ask" }).map_err(|m| e(ErrorKind::Other, m))?;
     state.db.set_status(task_id, "running").map_err(|m| e(ErrorKind::Other, m))?;
     let _ = state.db.set_setting("policy", policy_name);
     emit(&app, AppEvent::TaskStatus { task_id, status: "running".into() });
@@ -366,21 +373,26 @@ pub fn run_start(app: AppHandle, state: State<'_, AppState>, task_id: i64, polic
         db: state.db.clone(),
         exe,
         project_dir: PathBuf::from(&project.path),
-        task_id,
-        exec_id,
+        kind: RunKind::Quest { task_id, exec_id },
         prompt: draft.body,
         policy,
+        autopilot,
         model,
         max_turns,
         data_dir: state.data_dir.join("runs"),
     });
     if let Err(m) = res {
-        state.db.finish_execution(exec_id, "failed", None, None, 0, Some(&m));
+        state.db.finish_execution(exec_id, "failed", None, None, 0, Some(&m), None);
         let _ = state.db.set_status(task_id, "failed");
         emit(&app, AppEvent::TaskStatus { task_id, status: "failed".into() });
         return Err(e(ErrorKind::Other, m));
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn run_set_autopilot(state: State<'_, AppState>, on: bool) -> bool {
+    state.runner.set_autopilot(on)
 }
 
 #[tauri::command]
@@ -395,6 +407,236 @@ pub fn permission_decide(state: State<'_, AppState>, request_id: String, allow: 
 
 pub fn data_dir(app: &AppHandle) -> PathBuf {
     app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("mushoku-guild"))
+}
+
+// ---------------------------------------------------------------- repository research (Claude, read-only)
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResearchView {
+    /// none | researching | ready | stale | failed | cancelled
+    pub status: String,
+    pub researched_at: Option<i64>,
+    pub files: Vec<String>,
+    pub report: String,
+    pub note: Option<String>,
+}
+
+fn research_view(state: &AppState, project_id: i64) -> ResearchView {
+    let running = state.runner.active_research() == Some(project_id);
+    let Some(r) = state.db.research(project_id) else {
+        return ResearchView { status: if running { "researching" } else { "none" }.into(), researched_at: None, files: vec![], report: String::new(), note: None };
+    };
+    let stale = state
+        .db
+        .project(project_id)
+        .map(|p| !r.fingerprint.is_empty() && crate::project_context::fingerprint(std::path::Path::new(&p.path)) != r.fingerprint)
+        .unwrap_or(false);
+    ViewParts { r, running, stale }.into_view()
+}
+
+struct ViewParts {
+    r: Research,
+    running: bool,
+    stale: bool,
+}
+impl ViewParts {
+    fn into_view(self) -> ResearchView {
+        let status = if self.running {
+            "researching".to_string()
+        } else if self.r.status == "ready" && self.stale {
+            "stale".to_string()
+        } else if self.r.status == "researching" {
+            "failed".to_string() // a leftover marker: nothing is running
+        } else {
+            self.r.status.clone()
+        };
+        let has_report = !self.r.report.is_empty();
+        ResearchView {
+            status,
+            researched_at: has_report.then_some(self.r.researched_at),
+            files: self.r.files,
+            report: self.r.report,
+            note: self.r.note,
+        }
+    }
+}
+
+const RESEARCH_PROMPT: &str = "You are researching this repository so another AI (a conversational adviser) can discuss it with the owner. \
+This is a READ-ONLY investigation: use only the Read, Glob and Grep tools. Never modify, create or delete anything, never run commands, scripts, \
+servers or installs, never change Git state, and stay inside this project folder. Never read or quote secrets: .env files, keys, certificates, \
+tokens, credentials or password values; if you meet one, say only that it exists. Skip generated and vendor folders (node_modules, target, dist, \
+build, .git, virtualenvs) and binary files.\n\n\
+Work strategically, not exhaustively: first inventory the repository (top-level layout, manifests, docs), then prioritise architecture docs, \
+entry points, configuration and the core source directories; read the important files and follow imports and call paths across modules; look at \
+the tests to learn conventions; keep track of which files you actually opened. On a large repository sample representative modules instead of \
+reading everything and say what you skipped.\n\n\
+Finish with ONE final message containing only a structured Markdown report with exactly these sections: \
+# Project overview; ## Technology stack; ## Architecture; ## Important modules; ## Entry points; ## Data flow; ## APIs and integrations; \
+## Database structure (write 'not applicable' if none); ## Testing strategy; ## Conventions; ## Known issues and technical debt; \
+## Important file paths and references; ## Uncertainties and areas not inspected. Cite concrete relative file paths (and function or class names) \
+for every claim, and clearly separate what you verified in the code from what you infer. Keep the report under about 4,000 words.";
+
+#[tauri::command]
+pub fn research_get(state: State<'_, AppState>, project_id: i64) -> ResearchView {
+    research_view(&state, project_id)
+}
+
+#[tauri::command]
+pub fn research_start(app: AppHandle, state: State<'_, AppState>, project_id: i64) -> R<ResearchView> {
+    let project = state.db.project(project_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown project"))?;
+    if state.runner.is_running() {
+        return Err(e(ErrorKind::Other, "Claude Code is busy with another run. Wait for it to finish first."));
+    }
+    let exe = claude::locate(state.db.setting("claude_path").as_deref()).ok_or_else(|| e(ErrorKind::NotFound, "Claude Code (claude.exe) was not found. Open the Guild tab and check Claude Code."))?;
+    let model = claude::resolve_model(state.db.setting("claude_model").as_deref()).unwrap_or("").to_string();
+    state.db.research_started(project_id);
+    let res = state.runner.start(StartRequest {
+        app,
+        db: state.db.clone(),
+        exe,
+        project_dir: PathBuf::from(&project.path),
+        kind: RunKind::Research { project_id },
+        prompt: RESEARCH_PROMPT.to_string(),
+        policy: Policy::ReadOnly,
+        autopilot: false,
+        model,
+        max_turns: 60,
+        data_dir: state.data_dir.join("runs"),
+    });
+    if let Err(m) = res {
+        state.db.research_finished(project_id, "failed", None, &[], "", Some(&m));
+        return Err(e(ErrorKind::Other, m));
+    }
+    Ok(research_view(&state, project_id))
+}
+
+#[tauri::command]
+pub fn research_cancel(state: State<'_, AppState>) -> bool {
+    state.runner.active_research().is_some() && state.runner.cancel()
+}
+
+// ---------------------------------------------------------------- Guild Chat (ChatGPT adviser)
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatOpen {
+    conversation: Conversation,
+    messages: Vec<ChatMessage>,
+    research: ResearchView,
+}
+
+fn chat_open_for(state: &AppState, conv: Conversation) -> ChatOpen {
+    ChatOpen { messages: state.db.chat_messages(conv.id), research: research_view(state, conv.project_id), conversation: conv }
+}
+
+#[tauri::command]
+pub fn chat_open(state: State<'_, AppState>, project_id: i64) -> R<ChatOpen> {
+    state.db.project(project_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown project"))?;
+    let conv = match state.db.latest_conversation(project_id) {
+        Some(c) => c,
+        None => state.db.create_conversation(project_id).map_err(|m| e(ErrorKind::Other, m))?,
+    };
+    Ok(chat_open_for(&state, conv))
+}
+
+#[tauri::command]
+pub fn chat_new(state: State<'_, AppState>, project_id: i64) -> R<ChatOpen> {
+    state.db.project(project_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown project"))?;
+    let conv = state.db.create_conversation(project_id).map_err(|m| e(ErrorKind::Other, m))?;
+    Ok(chat_open_for(&state, conv))
+}
+
+const CHAT_INSTRUCTIONS: &str = "You are the Reasoner in Mushoku Guild: a friendly, expert software engineering companion talking with the owner of one project. \
+Discuss the project naturally: architecture, trade-offs, why code is the way it is, what to build next, how to approach a feature (for example a payment \
+gateway or an auth change), and help shape future quests. Be concise and concrete; ask a useful follow-up question when it helps; use Markdown with fenced \
+code blocks.\n\n\
+HONESTY RULES. You cannot open files or run anything. You only know (1) what the owner tells you, (2) the project profile and (3) the Claude repository \
+research below, if present. Never claim to have read, run or verified anything that is not in those sections. Label the basis of important statements: \
+'From the repository research' (cite the file paths given there), 'From you' (the owner said it) or 'My suggestion/assumption'. When you lack the evidence for a \
+good answer, say exactly what you would like inspected and offer: 'Want me to ask Claude to investigate?' (the owner has an Ask Claude for Context button).";
+
+const MAX_RESEARCH_IN_PROMPT: usize = 30_000;
+
+/// System prompt for chat: fixed rules + project profile + (if any) Claude's research report with its age.
+pub fn build_chat_instructions(name: &str, path: &str, profile: &ContextInfo, research: Option<(&str, i64, bool)>) -> String {
+    let mut s = format!("{CHAT_INSTRUCTIONS}\n\nProject: {name}\nFolder: {path}\n");
+    if profile.status == "unavailable" || profile.text.is_empty() {
+        s.push_str("\nPROJECT PROFILE: unavailable.\n");
+    } else {
+        s.push_str(&format!("\n<project_profile>\n{}\n</project_profile>\n", profile.text));
+    }
+    match research {
+        Some((report, at, stale)) => {
+            let clipped: String = report.chars().take(MAX_RESEARCH_IN_PROMPT).collect();
+            s.push_str(&format!(
+                "\n<repository_research researched_at_unix_ms=\"{at}\"{}>\nThis report was written by Claude Code after reading the repository (read-only).\n{clipped}\n</repository_research>\n",
+                if stale { " possibly_outdated=\"true\"" } else { "" }
+            ));
+        }
+        None => s.push_str("\nREPOSITORY RESEARCH: none yet. You have not seen any source code. Be explicit about that and offer to ask Claude to investigate when the question needs it.\n"),
+    }
+    s
+}
+
+#[tauri::command]
+pub fn chat_send(app: AppHandle, state: State<'_, AppState>, conversation_id: i64, text: String) -> R<u64> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err(e(ErrorKind::Other, "Type a message first."));
+    }
+    if text.len() > 20_000 {
+        return Err(e(ErrorKind::Other, "That message is too long (20,000 characters maximum)."));
+    }
+    let conv = state.db.conversation(conversation_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown conversation"))?;
+    let project = state.db.project(conv.project_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown project"))?;
+    if !state.chatgpt.status().connected {
+        return Err(e(ErrorKind::NotConnected, "Connect ChatGPT first (Guild tab)."));
+    }
+    state.db.add_chat_message(conversation_id, "user", &text).map_err(|m| e(ErrorKind::Other, m))?;
+    let generation = state.chat_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    let cancel = Arc::new(AtomicBool::new(false));
+    if let Some(old) = state.chat_cancel.lock().unwrap_or_else(|p| p.into_inner()).replace(cancel.clone()) {
+        old.store(true, Ordering::SeqCst);
+    }
+    let view = research_view(&state, project.id);
+    let (db, gpt, contexts) = (state.db.clone(), state.chatgpt.clone(), state.contexts.clone());
+    std::thread::spawn(move || {
+        let root = std::path::Path::new(&project.path);
+        let mut profile = contexts.get(project.id, root, false);
+        if profile.status == "stale" {
+            profile = contexts.get(project.id, root, true);
+        }
+        let research = (!view.report.is_empty()).then(|| (view.report.as_str(), view.researched_at.unwrap_or(0), view.status == "stale"));
+        let instructions = build_chat_instructions(&project.name, &project.path, &profile, research);
+        let all = db.chat_messages(conversation_id);
+        let skip = all.len().saturating_sub(40);
+        let messages: Vec<(String, String)> = all.into_iter().skip(skip).map(|m| (m.role, m.body)).collect();
+        let model = match db.setting("chatgpt_model").filter(|m| !m.is_empty()) {
+            Some(m) => Ok(m),
+            None => gpt.models().and_then(|ms| ms.into_iter().next().map(|m| m.slug).ok_or_else(|| e(ErrorKind::Eligibility, "ChatGPT offers no models to this account."))),
+        };
+        let outcome = model.and_then(|m| {
+            let a = app.clone();
+            gpt.stream(&m, &instructions, &messages, &cancel, &mut |d| emit(&a, AppEvent::ChatDelta { conversation_id, generation, text: d.to_string() }))
+        });
+        match outcome {
+            Ok(reply) if !reply.trim().is_empty() => match db.add_chat_message(conversation_id, "assistant", reply.trim()) {
+                Ok(message) => emit(&app, AppEvent::ChatDone { conversation_id, generation, message }),
+                Err(m) => emit(&app, AppEvent::ChatFailed { conversation_id, generation, kind: ErrorKind::Other, message: m }),
+            },
+            Ok(_) => emit(&app, AppEvent::ChatFailed { conversation_id, generation, kind: ErrorKind::Protocol, message: "ChatGPT returned an empty reply.".into() }),
+            Err(err) => emit(&app, AppEvent::ChatFailed { conversation_id, generation, kind: err.kind, message: err.message }),
+        }
+    });
+    Ok(generation)
+}
+
+#[tauri::command]
+pub fn chat_cancel(state: State<'_, AppState>) {
+    if let Some(c) = state.chat_cancel.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+        c.store(true, Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]
@@ -422,4 +664,26 @@ mod tests {
         db.set_setting("claude_model", "default").unwrap();
         assert_eq!(claude::resolve_model(db.setting("claude_model").as_deref()), None);
     }
+
+    #[test]
+    fn chat_instructions_hand_the_research_to_chatgpt_with_provenance_rules() {
+        let profile = info("ready", "Project name: demo");
+        let with = build_chat_instructions("demo", "C:\\demo", &profile, Some(("## Architecture\nsrc/api/routes.ts handles HTTP", 1234, false)));
+        assert!(with.contains("<repository_research") && with.contains("src/api/routes.ts") && with.contains("<project_profile>"));
+        assert!(with.contains("Never claim to have read") && with.contains("From the repository research"));
+        assert!(!with.contains("possibly_outdated"));
+        let stale = build_chat_instructions("demo", "C:\\demo", &profile, Some(("r", 1, true)));
+        assert!(stale.contains("possibly_outdated=\"true\""));
+        let none = build_chat_instructions("demo", "C:\\demo", &info("unavailable", ""), None);
+        assert!(none.contains("REPOSITORY RESEARCH: none yet") && none.contains("PROJECT PROFILE: unavailable") && !none.contains("<repository_research"));
+        assert!(none.contains("Want me to ask Claude to investigate?"));
+    }
+
+    #[test]
+    fn a_huge_research_report_is_clipped_in_the_request() {
+        let big = "x".repeat(MAX_RESEARCH_IN_PROMPT * 2);
+        let s = build_chat_instructions("d", "p", &info("ready", "t"), Some((&big, 1, false)));
+        assert!(s.len() < MAX_RESEARCH_IN_PROMPT + 6_000);
+    }
 }
+

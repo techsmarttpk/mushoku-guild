@@ -8,7 +8,7 @@ test("the welcome gate fires exactly once per session, however often it is asked
   assert.equal(createWelcomeGate()(), true, "a new session gets its own greeting");
 });
 
-test("every line fits the pixel bubble (3 lines of 17 characters)", () => {
+test("every line fits the pixel bubble (3 lines of 18 characters)", () => {
   for (const line of ALL_DIALOGUE) {
     const wrapped = wrapText(line);
     assert.ok(wrapped.length <= BUBBLE_LINES, `${line} -> ${wrapped.length} lines`);

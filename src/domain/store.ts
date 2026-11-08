@@ -4,6 +4,9 @@ import type {
   Activity,
   AppEvent,
   ChatGptStatus,
+  ChatMessage,
+  Conversation,
+  ResearchView,
   ClaudeInfo,
   ContextInfo,
   Draft,
@@ -20,6 +23,8 @@ export interface PermissionRequest {
   toolName: string;
   summary: string;
   input: string;
+  /** why Auto Pilot did not approve it automatically */
+  reason: string | null;
 }
 
 export interface UiState {
@@ -42,6 +47,16 @@ export interface UiState {
   activity: Activity[];
   permissions: PermissionRequest[];
   currentTool: string | null;
+  /** Auto Pilot state of the open quest's running execution (scoped to that run only). */
+  autopilot: boolean;
+  conversation: Conversation | null;
+  chatMessages: ChatMessage[];
+  chatStream: string;
+  chatGeneration: number;
+  chatStreaming: boolean;
+  chatError: ProviderError | null;
+  research: ResearchView | null;
+  researchActivity: Activity[];
   rate: { fiveHour: number | null; sevenDay: number | null; status: string | null } | null;
   error: ProviderError | null;
   finalNote: string | null;
@@ -67,6 +82,15 @@ export const initialState: UiState = {
   activity: [],
   permissions: [],
   currentTool: null,
+  autopilot: false,
+  conversation: null,
+  chatMessages: [],
+  chatStream: "",
+  chatGeneration: 0,
+  chatStreaming: false,
+  chatError: null,
+  research: null,
+  researchActivity: [],
   rate: null,
   error: null,
   finalNote: null,
@@ -76,7 +100,9 @@ export type Action =
   | { type: "event"; event: AppEvent }
   | { type: "patch"; patch: Partial<UiState> }
   | { type: "select_task"; detail: TaskDetail }
-  | { type: "generation_started"; generation: number };
+  | { type: "generation_started"; generation: number }
+  | { type: "chat_opened"; conversation: Conversation; messages: ChatMessage[]; research: ResearchView }
+  | { type: "chat_sending"; message: ChatMessage; generation: number };
 
 const MAX_LIVE_ACTIVITY = 800;
 
@@ -107,10 +133,15 @@ export function reduce(s: UiState, a: Action): UiState {
         permissions: [],
         currentTool: null,
         finalNote: a.detail.executions.at(-1)?.note ?? null,
+        autopilot: a.detail.task.status === "running" && a.detail.executions.at(-1)?.permissionMode === "autopilot",
         error: null,
       };
     case "generation_started":
       return { ...s, streamText: "", streaming: false, streamGeneration: a.generation, error: null };
+    case "chat_opened":
+      return { ...s, conversation: a.conversation, chatMessages: a.messages, research: a.research, chatStream: "", chatStreaming: false, chatError: null };
+    case "chat_sending":
+      return { ...s, chatMessages: [...s.chatMessages, a.message], chatGeneration: a.generation, chatStream: "", chatStreaming: true, chatError: null };
     case "event":
       return reduceEvent(s, a.event);
   }
@@ -142,7 +173,9 @@ function reduceEvent(s: UiState, e: AppEvent): UiState {
       };
     case "run_started":
       if (e.taskId !== s.selectedTaskId) return s;
-      return { ...s, activity: [], permissions: [], currentTool: null, finalNote: null, error: null };
+      return { ...s, activity: [], permissions: [], currentTool: null, finalNote: null, error: null, autopilot: e.autopilot };
+    case "run_mode":
+      return e.taskId === s.selectedTaskId ? { ...s, autopilot: e.autopilot } : s;
     case "run_activity": {
       if (e.taskId !== s.selectedTaskId) return s;
       const activity = [...s.activity, e.activity].slice(-MAX_LIVE_ACTIVITY);
@@ -156,14 +189,42 @@ function reduceEvent(s: UiState, e: AppEvent): UiState {
         ...s,
         permissions: [
           ...s.permissions,
-          { requestId: e.requestId, taskId: e.taskId, toolName: e.toolName, summary: e.summary, input: e.input },
+          { requestId: e.requestId, taskId: e.taskId, toolName: e.toolName, summary: e.summary, input: e.input, reason: e.reason },
         ],
       };
     case "run_permission_resolved":
       return { ...s, permissions: s.permissions.filter((p) => p.requestId !== e.requestId) };
-    case "run_finished":
-      if (e.taskId !== s.selectedTaskId) return s;
-      return { ...s, permissions: [], currentTool: null, finalNote: e.note ?? e.result };
+    case "run_finished": {
+      // The one terminal event of an execution: applies even when another task is open, and is idempotent.
+      const status = e.status === "completed" || e.status === "cancelled" ? e.status : "failed";
+      const applied = withStatus(s.tasks, s.detail, e.taskId, status);
+      if (e.taskId !== s.selectedTaskId) return { ...s, tasks: applied.tasks };
+      return { ...s, ...applied, permissions: [], currentTool: null, autopilot: false, finalNote: e.note ?? e.result };
+    }
+    case "chat_delta":
+      if (e.conversationId !== s.conversation?.id || e.generation < s.chatGeneration) return s;
+      return { ...s, chatGeneration: e.generation, chatStreaming: true, chatStream: s.chatStream + e.text };
+    case "chat_done":
+      if (e.conversationId !== s.conversation?.id) return s;
+      return { ...s, chatStreaming: false, chatStream: "", chatMessages: s.chatMessages.some((m) => m.id === e.message.id) ? s.chatMessages : [...s.chatMessages, e.message] };
+    case "chat_failed":
+      if (e.conversationId !== s.conversation?.id || e.generation < s.chatGeneration) return s;
+      return { ...s, chatStreaming: false, chatStream: "", chatError: e.kind === "cancelled" ? null : { kind: e.kind, message: e.message } };
+    case "research_activity":
+      return s.conversation && e.projectId === s.conversation.projectId ? { ...s, researchActivity: [...s.researchActivity, e.activity].slice(-MAX_LIVE_ACTIVITY) } : s;
+    case "research_finished":
+      return s.conversation && e.projectId === s.conversation.projectId
+        ? {
+            ...s,
+            research: {
+              status: e.research.status as ResearchView["status"],
+              researchedAt: e.research.report ? e.research.researchedAt : (s.research?.researchedAt ?? null),
+              files: e.research.files.length ? e.research.files : (s.research?.files ?? []),
+              report: e.research.report || s.research?.report || "",
+              note: e.research.note,
+            },
+          }
+        : s;
     case "claude_rate":
       return { ...s, rate: { fiveHour: e.fiveHour, sevenDay: e.sevenDay, status: e.status } };
   }
