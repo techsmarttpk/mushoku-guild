@@ -3,7 +3,7 @@ import { CafeScene, SCENE_H, SCENE_W } from "./cafe/CafeScene.ts";
 import { projectScene } from "./domain/scene.ts";
 import { initialState, reduce } from "./domain/store.ts";
 import type { Model, Policy, Project, ProviderError, Task } from "./domain/types.ts";
-import { api, benchConfig, benchReady, benchReport, onAppEvent, onWindowMinimized, toProviderError } from "./ipc.ts";
+import { api, onAppEvent, onWindowMinimized, toProviderError } from "./ipc.ts";
 import { ActivityFeed, ErrorNote, GuildPanel, HistoryList, NewTask, PermissionDialog, TaskView } from "./ui/panels.tsx";
 
 type Tab = "quest" | "guild" | "log";
@@ -96,15 +96,6 @@ export function App() {
         sync();
       });
       if (cancelled) unlisten();
-      try {
-        const cfg = await benchConfig();
-        if (cfg.enabled) {
-          await benchReady();
-          for (const ms of cfg.marksMs) setTimeout(() => void benchReport({ scenario: cfg.scenario, diagnostics: scene.diagnostics(), at: Date.now() }).catch(() => undefined), ms);
-        }
-      } catch {
-        /* measurement hooks are optional */
-      }
     })();
     return () => {
       cancelled = true;

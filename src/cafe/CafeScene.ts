@@ -8,6 +8,7 @@
 //      working poses .... 220 ms  (typing, writing, waving, celebrating …)
 //      pure idle ........ 500 ms  (breathing, sipping tea)
 //  - A frame is drawn only when the timer fires; nothing is scheduled while the window is minimised/hidden.
+import "pixi.js/unsafe-eval"; // CSP-safe shader/uniform sync (no `new Function`)
 import { Application, Sprite, Texture, Ticker } from "pixi.js";
 import type { BoardState, BubbleKind, SceneState, Spot } from "../domain/scene.ts";
 import { IDLE_SCENE } from "../domain/scene.ts";

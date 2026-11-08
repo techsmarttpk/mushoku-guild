@@ -11,6 +11,10 @@ name = "mushoku_guild_lib"
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# Verification only: seeds a project/task/approved prompt from env vars. Not part of the shipped build.
+dev-seed = []
+
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
