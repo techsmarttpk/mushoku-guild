@@ -315,7 +315,7 @@ const POLICY_TEXT: Record<Policy, { name: string; text: string }> = {
   accept_edits: { name: "Allow edits, ask for commands", text: "File edits inside the project are allowed automatically; shell commands still wait for your Allow." },
 };
 
-export function NewTask(props: { project: Project | null; context: ContextInfo | null; contextBusy: boolean; connected: boolean; onSubmit: (title: string, description: string, files: File[]) => void; busy: boolean }) {
+export function NewTask(props: { project: Project | null; contextNode: (query: string) => ReactNode; connected: boolean; onSubmit: (title: string, description: string, files: File[]) => void; busy: boolean }) {
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
   const [files, setFiles] = useState<Pending[]>([]);
@@ -333,7 +333,7 @@ export function NewTask(props: { project: Project | null; context: ContextInfo |
       }}
     >
       <h3>New quest for {props.project.name}</h3>
-      <ContextBadge context={props.context} busy={props.contextBusy} />
+      {props.contextNode(desc)}
       <label className="field">
         Title (optional)
         <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} />
@@ -365,6 +365,8 @@ export function TaskView(props: {
   permissionsNode?: ReactNode;
   rememberNode?: ReactNode;
   servicesNode?: ReactNode;
+  /** the context selector for the ChatGPT request this view can make */
+  contextNode?: ReactNode;
   canStart: boolean;
   onGenerate: (note: string | null) => void;
   onStopReasoner: () => void;
@@ -391,7 +393,7 @@ export function TaskView(props: {
         <h3>{task.title}</h3>
         <span className={`pill s-${task.status}`}>{statusLabel(task.status)}</span>
       </div>
-      <ContextBadge context={state.context} busy={state.contextBusy} />
+      {props.contextNode}
       {props.servicesNode}
       <details open={task.status === "draft"}>
         <summary>Your request</summary>
@@ -409,7 +411,7 @@ export function TaskView(props: {
         <>
           <label className="field">
             Prompt being written{state.streaming ? "…" : " (waiting for ChatGPT)"}
-            <textarea rows={14} readOnly value={state.streamText} placeholder="The reply streams in here as ChatGPT writes it." />
+            <textarea rows={14} readOnly value={state.streamText} placeholder={state.streamNote || "The reply streams in here as ChatGPT writes it."} />
           </label>
           <button className="btn btn-quiet" onClick={props.onStopReasoner}>
             Stop

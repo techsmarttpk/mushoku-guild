@@ -56,6 +56,11 @@ export class AtmosphereLayer {
     this.lamps = GRADES[initial].lamps;
   }
 
+  /** The tint characters currently get, so a character added later matches the others. */
+  get actorColor(): number {
+    return this.actorTint;
+  }
+
   get current(): Daypart {
     return this.theme;
   }

@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from "react";
-import { PROVIDER_NAME, type UState } from "../domain/uchat.ts";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { PROVIDER_NAME, speakerName, type UState } from "../domain/uchat.ts";
+import { STATE_LABEL, canChat, memberState, type GuildMember } from "../domain/guild.ts";
 import type { UMessage, UProvider, USummary } from "../domain/types.ts";
 import { Markdown, researchAge } from "./ChatPanel.tsx";
 import { ErrorNote } from "./panels.tsx";
 
-const GLYPH: Record<UProvider, string> = { chatgpt: "G", claude: "C" };
+const GLYPH: Record<UProvider, string> = { chatgpt: "G", claude: "C", openrouter: "O" };
 
-function Badge({ provider }: { provider: UProvider }) {
+function Badge({ provider, name }: { provider: UProvider; name?: string }) {
+  const label = name ?? PROVIDER_NAME[provider];
   return (
-    <span className={`uc-badge uc-${provider}`} title={PROVIDER_NAME[provider]} aria-label={PROVIDER_NAME[provider]}>
+    <span className={`uc-badge uc-${provider}`} title={label} aria-label={label}>
       {GLYPH[provider]}
     </span>
   );
@@ -35,14 +37,14 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function Bubble({ m, provider }: { m: UMessage; provider: UProvider }) {
+function Bubble({ m, provider, name }: { m: UMessage; provider: UProvider; name: string }) {
   const mine = m.role === "user";
   return (
     <div className={`uc-msg ${mine ? "uc-me" : `uc-them uc-${provider}`}`}>
-      {!mine && <Badge provider={provider} />}
+      {!mine && <Badge provider={provider} name={name} />}
       <div className="uc-bubble">
         <div className="uc-meta">
-          <strong>{mine ? "You" : PROVIDER_NAME[provider]}</strong>
+          <strong>{mine ? "You" : name}</strong>
           {m.status === "interrupted" && <span className="tag"> interrupted</span>}
           <small className="muted"> · {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>
           <CopyButton text={m.body} />
@@ -131,7 +133,11 @@ export function UniversalChat(props: {
   u: UState;
   chatgptConnected: boolean;
   claudeReady: boolean;
-  onProvider: (p: UProvider) => void;
+  /** recruited OpenRouter models the owner can talk to */
+  guild: GuildMember[];
+  /** the context selector, rendered above the message box */
+  contextNode: ReactNode;
+  onProvider: (p: UProvider, model?: string) => void;
   onQuery: (q: string) => void;
   onSend: (text: string) => void;
   onStop: () => void;
@@ -145,7 +151,11 @@ export function UniversalChat(props: {
   const [text, setText] = useState("");
   const end = useRef<HTMLDivElement>(null);
   const provider = u.current?.provider ?? u.provider;
-  const available = provider === "chatgpt" ? props.chatgptConnected : props.claudeReady;
+  const model = provider === "openrouter" ? (u.current?.model ?? u.model) : "";
+  const names = useMemo(() => new Map(props.guild.map((g) => [g.modelId, g.name])), [props.guild]);
+  const member = props.guild.find((g) => g.modelId === model);
+  const speaker = speakerName(provider, model, names);
+  const available = provider === "chatgpt" ? props.chatgptConnected : provider === "claude" ? props.claudeReady : !!member && canChat(member);
   const canSend = available && !u.streaming && text.trim().length > 0;
   const lastId = u.messages.at(-1)?.id;
   useEffect(() => {
@@ -157,7 +167,16 @@ export function UniversalChat(props: {
     props.onSend(text.trim());
     setText("");
   };
-  const unavailable = provider === "chatgpt" ? "Connect ChatGPT in the Guild tab to chat with it." : "Claude Code was not found or is not signed in. Check it in the Guild tab.";
+  const unavailable =
+    provider === "chatgpt"
+      ? "Connect ChatGPT in the Guild tab to chat with it."
+      : provider === "claude"
+        ? "Claude Code was not found or is not signed in. Check it in the Guild tab."
+        : !model
+          ? "Pick one of your recruited models above."
+          : !member
+            ? "This model is no longer in the Guild. Recruit it again in the Guild tab to continue this conversation."
+            : `${STATE_LABEL[memberState(member)]}${member.reason ? `: ${member.reason}` : ""}`;
 
   return (
     <div className="chat-wrap uc-wrap">
@@ -173,17 +192,39 @@ export function UniversalChat(props: {
               </span>
             </button>
           ))}
+          <label className={`uc-provider uc-openrouter ${provider === "openrouter" ? "on" : ""}`}>
+            <Badge provider="openrouter" name={member?.name} />
+            <span>
+              <strong>{member ? member.name : "Guild model"}</strong>
+              <select
+                value={model}
+                disabled={u.streaming}
+                aria-label="Recruited model"
+                onChange={(e) => e.target.value && props.onProvider("openrouter", e.target.value)}
+              >
+                <option value="">{props.guild.length ? "Choose a recruited model…" : "No models recruited yet"}</option>
+                {props.guild.map((g) => (
+                  <option key={g.id} value={g.modelId} disabled={!canChat(g) && g.modelId !== model}>
+                    {g.name}
+                    {memberState(g) !== "available" ? ` (${memberState(g)})` : ""}
+                  </option>
+                ))}
+                {model && !member && <option value={model}>{model} (not in the Guild)</option>}
+              </select>
+            </span>
+          </label>
         </div>
         <div className="chat-head">
           <h3 title={u.current?.title}>{u.current?.title ?? "New conversation"}</h3>
-          <span className={`uc-tag uc-${provider}`}>{PROVIDER_NAME[provider]}{u.current?.model ? ` · ${u.current.model}` : ""}</span>
+          <span className={`uc-tag uc-${provider}`}>{provider === "openrouter" ? `OpenRouter · ${speaker}` : PROVIDER_NAME[provider]}{provider !== "openrouter" && u.current?.model ? ` · ${u.current.model}` : ""}</span>
         </div>
         {provider === "claude" && <div className="uc-note">Claude Code in conversation mode: it can only talk. No files, no commands, no repository.</div>}
+        {provider === "openrouter" && model && <div className="uc-note">{speaker} is a free model on OpenRouter (a third party). It can only talk, and every message goes to exactly this model ({model}).</div>}
 
         <div className="chat-log uc-log" aria-live="polite">
           {u.messages.length === 0 && !u.streaming && (
             <div className="muted pad">
-              Talk to {PROVIDER_NAME[provider]} about anything: startup ideas, how something works, comparing technologies, a project you have not started yet. This chat belongs to you, not to a repository, and it never sees your code. Conversations stay here after you restart.
+              Talk to {speaker} about anything: startup ideas, how something works, comparing technologies, a project you have not started yet. This chat belongs to you, not to a repository, and it never sees your code. Conversations stay here after you restart.
             </div>
           )}
           {u.hasMore && (
@@ -192,14 +233,14 @@ export function UniversalChat(props: {
             </button>
           )}
           {u.messages.map((m) => (
-            <Bubble key={m.id} m={m} provider={u.current?.provider ?? provider} />
+            <Bubble key={m.id} m={m} provider={u.current?.provider ?? provider} name={speaker} />
           ))}
           {u.streaming && (
             <div className={`uc-msg uc-them uc-${provider}`}>
-              <Badge provider={provider} />
+              <Badge provider={provider} name={speaker} />
               <div className="uc-bubble">
                 <div className="uc-meta">
-                  <strong>{PROVIDER_NAME[provider]}</strong> <small className="muted">{u.stream ? "is writing…" : "is thinking…"}</small>
+                  <strong>{speaker}</strong> <small className="muted">{u.stream ? "is writing…" : "is thinking…"}</small>
                 </div>
                 {u.stream ? <Markdown text={u.stream} /> : <span className="muted">…</span>}
               </div>
@@ -208,6 +249,7 @@ export function UniversalChat(props: {
           <div ref={end} />
         </div>
         <ErrorNote error={u.error} />
+        {props.contextNode}
         <div className="chat-input uc-input">
           <textarea
             rows={3}
@@ -219,9 +261,9 @@ export function UniversalChat(props: {
                 send();
               }
             }}
-            placeholder={available ? `Message ${PROVIDER_NAME[provider]}… (Enter to send, Shift+Enter for a new line)` : unavailable}
+            placeholder={available ? `Message ${speaker}… (Enter to send, Shift+Enter for a new line)` : unavailable}
             disabled={!available}
-            aria-label={`Message ${PROVIDER_NAME[provider]}`}
+            aria-label={`Message ${speaker}`}
           />
           {u.streaming ? (
             <button className="btn btn-quiet" onClick={props.onStop}>

@@ -39,3 +39,9 @@ Status words: **Working** = implemented and exercised in the running app; **Expe
 - **To-Do** tab: global personal tasks with optional repository tag, priority, due date, filters, sorting, progress.
 - **Idle conversations** between the two characters (offline, no AI).
 - **Library**: search button on the shelf; the shelf resizes with the window.
+
+## Cycle 7 additions
+- **Context selector** (No Context / Project Capsule / Relevant Context / Deep Research) on quests, Guild Chat and Universal Chat.
+- **OpenRouter free models**: connect, browse, test, recruit (Guild tab, rectangular + button). Free-only is enforced in four layers.
+- **Guild members** appear as unique pixel characters in the café; click for chat, details, removal.
+- **Universal Chat** supports recruited models, each conversation bound to its exact model.

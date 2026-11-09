@@ -2,6 +2,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Todo } from "./domain/todos.ts";
+import type { ContextMode } from "./domain/context.ts";
+import type { GuildMember, KeyInfo, OrPage, OrStatus, OrTest } from "./domain/guild.ts";
 import type {
   AppEvent,
   ChatGptStatus,
@@ -47,6 +49,19 @@ import type {
   UProvider,
 } from "./domain/types.ts";
 
+export interface ContextPrefs {
+  quest: ContextMode;
+  chat: ContextMode;
+  capsuleBudget: number;
+  relevantBudget: number;
+}
+export interface ContextPreview {
+  mode: ContextMode;
+  tokens: number;
+  sources: string[];
+  truncated: boolean;
+}
+
 /** Rust-published window state: WebView2 itself does not report minimisation to the page. */
 export const onWindowMinimized = (handler: (minimized: boolean) => void): Promise<UnlistenFn> =>
   listen<boolean>("window-minimized", (e) => handler(e.payload));
@@ -78,7 +93,7 @@ export const api = {
   chatgptCancelConnect: () => invoke<void>("chatgpt_cancel_connect"),
   chatgptDisconnect: () => invoke<void>("chatgpt_disconnect"),
   chatgptModels: () => invoke<Model[]>("chatgpt_models"),
-  reasonerGenerate: (taskId: number, note: string | null) => invoke<number>("reasoner_generate", { taskId, note }),
+  reasonerGenerate: (taskId: number, note: string | null, contextMode: ContextMode) => invoke<number>("reasoner_generate", { taskId, note, contextMode }),
   reasonerCancel: () => invoke<void>("reasoner_cancel"),
   promptSave: (taskId: number, body: string) => invoke<Draft>("prompt_save", { taskId, body }),
   promptApprove: (taskId: number, draftId: number) => invoke<void>("prompt_approve", { taskId, draftId }),
@@ -134,7 +149,7 @@ export const api = {
   researchCancel: () => invoke<boolean>("research_cancel"),
   chatOpen: (projectId: number) => invoke<ChatOpen>("chat_open", { projectId }),
   chatNew: (projectId: number) => invoke<ChatOpen>("chat_new", { projectId }),
-  chatSend: (conversationId: number, text: string) => invoke<number>("chat_send", { conversationId, text }),
+  chatSend: (conversationId: number, text: string, contextMode: ContextMode) => invoke<number>("chat_send", { conversationId, text, contextMode }),
   chatCancel: () => invoke<void>("chat_cancel"),
   runCancel: () => invoke<boolean>("run_cancel"),
   attachmentAdd: (taskId: number, name: string, data: string) => invoke<AttachmentView>("attachment_add", { taskId, name, data }),
@@ -144,7 +159,8 @@ export const api = {
   uchatList: (query: string) => invoke<USummary[]>("uchat_list", { query }),
   uchatOpen: (conversationId: number) => invoke<UOpen>("uchat_open", { conversationId }),
   uchatOlder: (conversationId: number, before: number) => invoke<[UMessage[], boolean]>("uchat_older", { conversationId, before }),
-  uchatSend: (conversationId: number | null, provider: UProvider, text: string) => invoke<USent>("uchat_send", { conversationId, provider, text }),
+  uchatSend: (conversationId: number | null, provider: UProvider, model: string | null, text: string, contextMode: ContextMode, projectId: number | null) =>
+    invoke<USent>("uchat_send", { conversationId, provider, model, text, contextMode, projectId }),
   uchatCancel: () => invoke<void>("uchat_cancel"),
   uchatRename: (conversationId: number, title: string) => invoke<void>("uchat_rename", { conversationId, title }),
   uchatDelete: (conversationId: number) => invoke<void>("uchat_delete", { conversationId }),
@@ -152,5 +168,18 @@ export const api = {
   todoSave: (id: number | null, title: string, description: string, priority: string, due: string | null, projectId: number | null) => invoke<Todo>("todo_save", { id, title, description, priority, due, projectId }),
   todoSetDone: (id: number, done: boolean) => invoke<Todo>("todo_set_done", { id, done }),
   todoDelete: (id: number) => invoke<void>("todo_delete", { id }),
+  orStatus: () => invoke<OrStatus>("or_status"),
+  orConnect: (apiKey: string) => invoke<OrStatus>("or_connect", { apiKey }),
+  orTestConnection: () => invoke<KeyInfo>("or_test_connection"),
+  orDisconnect: () => invoke<OrStatus>("or_disconnect"),
+  orRefreshCatalog: () => invoke<OrStatus>("or_refresh_catalog"),
+  orCatalog: (query: string, offset: number, limit: number) => invoke<OrPage>("or_catalog", { query, offset, limit }),
+  orTestModel: (modelId: string, prompt: string) => invoke<OrTest>("or_test_model", { modelId, prompt }),
+  guildList: () => invoke<GuildMember[]>("guild_list"),
+  guildRecruit: (modelId: string, seed: number) => invoke<GuildMember[]>("guild_recruit", { modelId, seed }),
+  guildRemove: (id: number) => invoke<GuildMember[]>("guild_remove", { id }),
+  contextPrefs: () => invoke<ContextPrefs>("context_prefs"),
+  contextBudgetsSet: (capsule: number, relevant: number) => invoke<ContextPrefs>("context_budgets_set", { capsule, relevant }),
+  contextPreview: (projectId: number | null, mode: ContextMode, query: string) => invoke<ContextPreview>("context_preview", { projectId, mode, query }),
   permissionDecide: (requestId: string, allow: boolean) => invoke<boolean>("permission_decide", { requestId, allow }),
 };

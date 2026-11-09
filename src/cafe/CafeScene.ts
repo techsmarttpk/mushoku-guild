@@ -9,7 +9,7 @@
 //      pure idle ........ 500 ms  (breathing, sipping tea)
 //  - A frame is drawn only when the timer fires; nothing is scheduled while the window is minimised/hidden.
 import "pixi.js/unsafe-eval"; // CSP-safe shader/uniform sync (no `new Function`)
-import { Application, Sprite, Texture, Ticker } from "pixi.js";
+import { Application, Container, Sprite, Texture, Ticker } from "pixi.js";
 import type { BoardState, BubbleKind, SceneState, Spot } from "../domain/scene.ts";
 import { IDLE_SCENE } from "../domain/scene.ts";
 import type { WelcomeStep } from "../domain/welcome.ts";
@@ -20,6 +20,8 @@ import type { Pen } from "./pixel.ts";
 import { AtmosphereLayer } from "./atmosphere.ts";
 import { HEALTHY, RESTORE_WAIT_MS, nextHealth, type HealthEvent, type RenderHealth } from "../domain/renderHealth.ts";
 import type { Daypart } from "../domain/atmosphere.ts";
+import { lookFor, placeMembers, type MemberState, type Spot as GuildSpot } from "../domain/guild.ts";
+import { MEMBER_H, MEMBER_W, buildDot, buildMember, buildNameplate } from "./memberSprites.ts";
 
 export const SCENE_W = W;
 export const SCENE_H = H;
@@ -51,6 +53,32 @@ interface Actor {
   pose: string;
   bubbleKind: BubbleKind;
   target: { pose: string; spot: Spot; bubble: BubbleKind };
+}
+
+/** A recruited model as the scene needs it. */
+export interface SceneMember {
+  id: number;
+  seed: number;
+  name: string;
+  vendor: string;
+  state: MemberState;
+}
+
+/** Where a character was clicked, in scene pixels (the UI turns it into a popover position). */
+export interface MemberPick {
+  id: number;
+  x: number;
+  y: number;
+  headY: number;
+}
+
+interface MemberActor {
+  m: SceneMember;
+  sprite: Sprite;
+  dot: Sprite;
+  frames: Texture[];
+  phase: number;
+  spot: GuildSpot;
 }
 
 export interface SceneDiagnostics {
@@ -111,6 +139,15 @@ export class CafeScene {
   private theme: Daypart = "morning";
   private lastStepAt = 0;
   private themed = false;
+  private wanted: SceneMember[] = [];
+  private members = new Map<number, MemberActor>();
+  private memberLayer: Container | null = null;
+  private actorTargets: Sprite[] = [];
+  private dotTex = new Map<MemberState, Texture>();
+  private selectedId: number | null = null;
+  private plate: Sprite | null = null;
+  private plateTex = new Map<string, Texture>();
+  private pickCb: (p: MemberPick | null) => void = () => undefined;
 
   /** The UI listens here to show a fallback (with Retry) when the renderer cannot recover by itself. */
   onStatus(cb: (h: RenderHealth) => void): void {
@@ -195,6 +232,8 @@ export class CafeScene {
     this.canvasEl = canvas;
     canvas.addEventListener("webglcontextlost", this.onContextLost);
     canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+    canvas.addEventListener("pointerdown", this.onPointerDown);
+    canvas.addEventListener("pointermove", this.onPointerMove);
 
     this.build();
     this.initialised = true;
@@ -255,6 +294,11 @@ export class CafeScene {
     const executor = make("executor");
     this.actors = { reasoner, executor };
 
+    // Guild members stand on the same layer as the two main characters: behind the desks, tinted by the same atmosphere.
+    this.memberLayer = new Container();
+    this.memberLayer.sortableChildren = true;
+    stage.addChild(this.memberLayer);
+    this.actorTargets = actorSprites;
     roomSprites.push(add(tex(buildForeground()), 0, 0));
     actorSprites.push(reasoner.sprite, executor.sprite);
     this.monitorTex = texs([buildMonitorFrame("off"), buildMonitorFrame("a"), buildMonitorFrame("b")]);
@@ -267,6 +311,129 @@ export class CafeScene {
     this.speechSprite = new Sprite();
     this.speechSprite.visible = false;
     stage.addChild(this.speechSprite);
+    this.plate = new Sprite();
+    this.plate.visible = false;
+    stage.addChild(this.plate);
+    this.members.clear(); // a rebuilt scene starts without sprites; the wanted roster is drawn again below
+    this.syncMembers();
+  }
+
+  // ---------------------------------------------------------------- guild members
+
+  /** The recruited models to show. Safe to call before the scene is ready: it is drawn as soon as it is. */
+  setGuild(list: SceneMember[]): void {
+    this.wanted = list;
+    if (this.initialised) this.syncMembers();
+  }
+
+  /** The UI is told when a character is clicked (or when the click lands elsewhere). */
+  onPick(cb: (p: MemberPick | null) => void): void {
+    this.pickCb = cb;
+  }
+
+  /** Marks the character whose nameplate is shown; null clears it. */
+  select(id: number | null): void {
+    if (this.selectedId === id) return;
+    this.selectedId = id;
+    this.paint();
+  }
+
+  private dropMember(a: MemberActor): void {
+    this.actorTargets.splice(this.actorTargets.indexOf(a.sprite), 1);
+    a.sprite.destroy();
+    a.dot.destroy();
+    for (const t of a.frames) t.destroy(true);
+  }
+
+  private syncMembers(): void {
+    const layer = this.memberLayer;
+    if (!layer || this.destroyed) return;
+    const { placed } = placeMembers(this.wanted);
+    const keep = new Set(placed.map((p) => p.id));
+    for (const [id, a] of this.members) {
+      if (!keep.has(id) || this.wanted.find((w) => w.id === id)?.seed !== a.m.seed) {
+        this.dropMember(a);
+        this.members.delete(id);
+      }
+    }
+    for (const p of placed) {
+      const m = this.wanted.find((w) => w.id === p.id) as SceneMember;
+      let a = this.members.get(p.id);
+      if (!a) {
+        const frames = texs(buildMember(lookFor(m.seed)));
+        const sprite = new Sprite(frames[0]);
+        sprite.tint = this.atmo?.actorColor ?? 0xffffff;
+        sprite.zIndex = p.spot.y;
+        const dot = new Sprite();
+        dot.zIndex = 10_000;
+        layer.addChild(sprite, dot);
+        this.actorTargets.push(sprite);
+        a = { m, sprite, dot, frames, phase: p.id % 2, spot: p.spot };
+        this.members.set(p.id, a);
+      }
+      a.m = m;
+      a.spot = p.spot;
+      a.sprite.zIndex = p.spot.y;
+      if (!this.dotTex.has(m.state)) this.dotTex.set(m.state, tex(buildDot(m.state)));
+    }
+    if (this.selectedId !== null && !this.members.has(this.selectedId)) {
+      this.selectedId = null;
+      this.pickCb(null);
+    }
+    this.lastRenderedKey = "";
+    this.paint();
+    this.schedule();
+  }
+
+  private hit(ev: PointerEvent): MemberActor | null {
+    const c = this.canvasEl;
+    if (!c || this.members.size === 0) return null;
+    const r = c.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    const x = (ev.clientX - r.left) * (W / r.width);
+    const y = (ev.clientY - r.top) * (H / r.height);
+    let best: MemberActor | null = null;
+    for (const a of this.members.values()) {
+      if (x >= a.spot.x - MEMBER_W / 2 - 1 && x <= a.spot.x + MEMBER_W / 2 + 1 && y >= a.spot.y - MEMBER_H - 2 && y <= a.spot.y + 1 && (!best || a.spot.y > best.spot.y)) best = a;
+    }
+    return best;
+  }
+
+  private readonly onPointerDown = (ev: PointerEvent): void => {
+    const a = this.hit(ev);
+    this.select(a ? a.m.id : null);
+    this.pickCb(a ? { id: a.m.id, x: a.spot.x, y: a.spot.y, headY: a.spot.y - MEMBER_H } : null);
+  };
+
+  private readonly onPointerMove = (ev: PointerEvent): void => {
+    if (this.canvasEl) this.canvasEl.style.cursor = this.hit(ev) ? "pointer" : "";
+  };
+
+  /** Animates the members and positions the dots and the nameplate; called from paint(). */
+  private paintMembers(t: number): void {
+    for (const a of this.members.values()) {
+      a.sprite.texture = a.frames[(t + a.phase) % a.frames.length] as Texture;
+      a.sprite.position.set(Math.round(a.spot.x - MEMBER_W / 2), Math.round(a.spot.y - MEMBER_H));
+      a.sprite.alpha = a.m.state === "unavailable" ? 0.55 : 1;
+      const dt = this.dotTex.get(a.m.state);
+      if (dt) a.dot.texture = dt;
+      a.dot.position.set(Math.round(a.spot.x - 2), Math.round(a.spot.y - MEMBER_H - 6));
+    }
+    const sel = this.selectedId === null ? undefined : this.members.get(this.selectedId);
+    if (!this.plate) return;
+    this.plate.visible = !!sel;
+    if (sel) {
+      const key = `${sel.m.id}|${sel.m.name}|${sel.m.vendor}`;
+      let pt = this.plateTex.get(key);
+      if (!pt) {
+        pt = tex(buildNameplate(sel.m.name, sel.m.vendor));
+        this.plateTex.set(key, pt);
+      }
+      this.plate.texture = pt;
+      const w = pt.width;
+      const above = sel.spot.y - MEMBER_H - 26;
+      this.plate.position.set(Math.min(Math.max(1, Math.round(sel.spot.x - w / 2)), W - w - 1), above >= 1 ? above : sel.spot.y + 3);
+    }
   }
 
   /**
@@ -488,6 +655,7 @@ export class CafeScene {
         a.bubble.position.set(Math.round(a.pos.x + 3), Math.round(a.pos.y - CHAR_H - 10 + jump));
       }
     }
+    this.paintMembers(t);
     if (this.speechSprite) {
       const sp = this.speech;
       const a = sp ? this.actors[sp.who] : null;
@@ -535,6 +703,8 @@ export class CafeScene {
     if (!this.actors) return "";
     const parts: Array<string | number> = [this.atmo?.key() ?? "", this.board, this.ticket?.texture.uid ?? 0, this.steamSprite?.texture.uid ?? 0, this.flameSprites[0]?.texture.uid ?? 0, this.monitor?.texture.uid ?? 0, this.speechSprite?.visible ? this.speechSprite.texture.uid : 0, this.speechSprite?.x ?? 0, this.speechSprite?.alpha ?? 1];
     for (const a of Object.values(this.actors)) parts.push(a.sprite.texture.uid, a.sprite.x, a.sprite.y, a.sprite.scale.x, a.bubble.visible ? a.bubble.texture.uid : 0, a.bubble.y);
+    for (const a of this.members.values()) parts.push(a.sprite.texture.uid, a.sprite.x, a.sprite.y, a.sprite.alpha, a.dot.texture.uid);
+    if (this.plate?.visible) parts.push(this.plate.texture.uid, this.plate.x, this.plate.y);
     return parts.join("|");
   }
 
@@ -566,6 +736,8 @@ export class CafeScene {
     if (this.restoreTimer !== null) clearTimeout(this.restoreTimer);
     this.canvasEl?.removeEventListener("webglcontextlost", this.onContextLost);
     this.canvasEl?.removeEventListener("webglcontextrestored", this.onContextRestored);
+    this.canvasEl?.removeEventListener("pointerdown", this.onPointerDown);
+    this.canvasEl?.removeEventListener("pointermove", this.onPointerMove);
     this.speechTimers.forEach(clearTimeout);
     if (this.initialised) {
       this.app.ticker.stop();

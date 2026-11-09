@@ -121,6 +121,7 @@ export type AppEvent =
   | { type: "chatgpt_auth"; stage: string; url: string | null }
   | { type: "reasoner_delta"; taskId: number; generation: number; text: string }
   | { type: "reasoner_done"; taskId: number; generation: number; draft: Draft }
+  | { type: "reasoner_note"; taskId: number; generation: number; text: string }
   | { type: "reasoner_failed"; taskId: number; generation: number; kind: ErrorKind; message: string }
   | { type: "task_status"; taskId: number; status: TaskStatus }
   | { type: "run_started"; taskId: number; executionId: number; autopilot: boolean }
@@ -436,7 +437,7 @@ export interface AttachmentView {
 }
 
 // ---- Universal Chat (global conversations, ChatGPT or Claude; never tied to a repository)
-export type UProvider = "chatgpt" | "claude";
+export type UProvider = "chatgpt" | "claude" | "openrouter";
 export interface UConv {
   id: number;
   title: string;

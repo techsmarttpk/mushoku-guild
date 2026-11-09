@@ -48,6 +48,8 @@ export interface UiState {
   selectedTaskId: number | null;
   detail: TaskDetail | null;
   streamText: string;
+  /** a status line while the reply is being prepared (for example while Deep Research runs) */
+  streamNote: string;
   streamGeneration: number;
   streaming: boolean;
   activity: Activity[];
@@ -92,6 +94,7 @@ export const initialState: UiState = {
   selectedTaskId: null,
   detail: null,
   streamText: "",
+  streamNote: "",
   streamGeneration: 0,
   streaming: false,
   activity: [],
@@ -166,6 +169,7 @@ export function reduce(s: UiState, a: Action): UiState {
         detail: a.detail,
         activity: a.detail.events,
         streamText: "",
+        streamNote: "",
         streaming: false,
         permissions: [],
         currentTool: null,
@@ -174,7 +178,7 @@ export function reduce(s: UiState, a: Action): UiState {
         error: null,
       };
     case "generation_started":
-      return { ...s, streamText: "", streaming: false, streamGeneration: a.generation, error: null };
+      return { ...s, streamText: "", streamNote: "", streaming: false, streamGeneration: a.generation, error: null };
     case "project_switched":
       // A repository is a workspace: nothing from the previous one may stay on screen.
       return {
@@ -226,16 +230,20 @@ function reduceEvent(s: UiState, e: AppEvent): UiState {
       return { ...s, ...withStatus(s.tasks, s.detail, e.taskId, e.status) };
     case "reasoner_delta":
       if (e.taskId !== s.selectedTaskId || e.generation < s.streamGeneration) return s;
-      return { ...s, streamGeneration: e.generation, streaming: true, streamText: s.streamText + e.text };
+      return { ...s, streamGeneration: e.generation, streaming: true, streamNote: "", streamText: s.streamText + e.text };
+    case "reasoner_note":
+      if (e.taskId !== s.selectedTaskId || e.generation < s.streamGeneration) return s;
+      return { ...s, streamGeneration: e.generation, streamNote: e.text };
     case "reasoner_done":
       if (e.taskId !== s.selectedTaskId) return s;
-      return { ...s, streaming: false, streamText: "", detail: addDraft(s.detail, e.draft) };
+      return { ...s, streaming: false, streamText: "", streamNote: "", detail: addDraft(s.detail, e.draft) };
     case "reasoner_failed":
       if (e.taskId !== s.selectedTaskId || e.generation < s.streamGeneration) return s;
       return {
         ...s,
         streaming: false,
         streamText: "",
+        streamNote: "",
         error: e.kind === "cancelled" ? null : { kind: e.kind, message: e.message },
       };
     case "run_started":

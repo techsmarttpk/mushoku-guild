@@ -224,7 +224,8 @@ your assumptions in a short 'Assumptions' section inside the prompt instead of a
 the complete revised prompt, not a diff. Output only the prompt text in Markdown, with no preamble and no commentary.";
 
 #[tauri::command]
-pub fn reasoner_generate(app: AppHandle, state: State<'_, AppState>, task_id: i64, note: Option<String>) -> R<u64> {
+pub fn reasoner_generate(app: AppHandle, state: State<'_, AppState>, task_id: i64, note: Option<String>, context_mode: Option<String>) -> R<u64> {
+    use crate::context::{assemble, Budgets, Mode};
     let task = state.db.task(task_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown task"))?;
     let project = state.db.project(task.project_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown project"))?;
     if !state.chatgpt.status().connected {
@@ -232,6 +233,13 @@ pub fn reasoner_generate(app: AppHandle, state: State<'_, AppState>, task_id: i6
     }
     if state.runner.is_running() {
         return Err(e(ErrorKind::Other, "Wait for the running execution to finish first."));
+    }
+    let mode = context_mode.as_deref().map(Mode::parse).unwrap_or_else(|| crate::context::remembered(&state.db, "quest"));
+    if mode == Mode::Deep && claude::locate(state.db.setting("claude_path").as_deref()).is_none() {
+        return Err(e(ErrorKind::NotFound, "Deep Research needs Claude Code, which was not found. Open the Guild tab and check Claude Code, or choose another context mode."));
+    }
+    if mode != Mode::Deep {
+        let _ = state.db.set_setting("ctx_mode_quest", mode.as_str()); // last-used choice; Deep is never remembered
     }
     state.db.set_status(task_id, "reasoning").map_err(|m| e(ErrorKind::Other, m))?;
     if let Some(n) = note.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
@@ -244,14 +252,39 @@ pub fn reasoner_generate(app: AppHandle, state: State<'_, AppState>, task_id: i6
     }
     emit(&app, AppEvent::TaskStatus { task_id, status: "reasoning".into() });
 
-    let (db, gpt, contexts) = (state.db.clone(), state.chatgpt.clone(), state.contexts.clone());
+    let (db, gpt) = (state.db.clone(), state.chatgpt.clone());
+    let env = chat::TurnEnv {
+        app: app.clone(),
+        db: state.db.clone(),
+        gpt: state.chatgpt.clone(),
+        contexts: state.contexts.clone(),
+        runner: state.runner.clone(),
+        services: state.services.clone(),
+        data_dir: state.data_dir.clone(),
+        base_instructions: "",
+    };
     std::thread::spawn(move || {
-        // Rescan only when the project changed since the last scan; a failure never blocks the prompt.
-        let mut ctx = contexts.get(project.id, std::path::Path::new(&project.path), false);
-        if ctx.status == "stale" {
-            ctx = contexts.get(project.id, std::path::Path::new(&project.path), true);
+        let root = std::path::PathBuf::from(&project.path);
+        let first = db.messages(task_id).first().map(|m| m.1.clone()).unwrap_or_default();
+        let query = format!("{}
+{}", task.title, first);
+        // Deep Research is the only mode that starts Claude Code. It is announced, read-only and bounded by the research workflow.
+        let mut findings: Option<String> = None;
+        if mode == Mode::Deep {
+            emit(&app, AppEvent::ReasonerNote { task_id, generation, text: "Deep Research: Claude Code is investigating the repository (read-only). This can take a few minutes.".into() });
+            let req = chat::ResearchRequest { objective: task.title.clone(), question: first.clone(), ..Default::default() };
+            let found = chat::probe(&env, &project, &req, &cancel);
+            if cancel.load(Ordering::SeqCst) {
+                return fail(&app, &db, task_id, generation, ProviderError::new(ErrorKind::Cancelled, "Cancelled."));
+            }
+            if found.status == "completed" && !found.text.trim().is_empty() {
+                findings = Some(chat::clip_findings(&found.text));
+            } else {
+                emit(&app, AppEvent::ReasonerNote { task_id, generation, text: format!("Claude's research gave no findings ({}). Continuing with the project capsule only.", found.note.unwrap_or_default()) });
+            }
         }
-        let instructions = build_instructions(&project.name, &project.path, &ctx);
+        let ctx = assemble(mode, Some(&root), &query, Budgets::load(&db));
+        let instructions = build_instructions(mode, &ctx.text, findings.as_deref());
         let mut messages = db.messages(task_id);
         if let Some(first) = messages.first_mut() {
             first.1 = format!("Quest title: {}\n\nQuest description:\n{}{}", task.title, first.1, crate::attachments::names_note(&db.attachments(task_id)));
@@ -281,22 +314,33 @@ pub fn reasoner_generate(app: AppHandle, state: State<'_, AppState>, task_id: i6
     Ok(generation)
 }
 
-/// System prompt: fixed guidance + the sanitized project context (or an explicit note that it is unavailable).
-pub fn build_instructions(name: &str, path: &str, ctx: &ContextInfo) -> String {
-    let context = if ctx.status == "unavailable" || ctx.text.is_empty() {
-        format!(
-            "Project name: {name}\nProject directory: {path}\n\nPROJECT CONTEXT UNAVAILABLE ({}). Do not assume the project language, framework or layout; \
-             rely only on the quest text, say in the Assumptions section that the stack is unknown, and tell Claude to inspect the repository first.",
-            ctx.error.as_deref().unwrap_or("not collected")
-        )
+/// System prompt: fixed guidance + whatever context the owner chose to send. `None` carries no project name, path or text.
+pub fn build_instructions(mode: crate::context::Mode, context: &str, findings: Option<&str>) -> String {
+    use crate::context::Mode;
+    let body = if mode == Mode::None {
+        "NO PROJECT CONTEXT: the owner chose to send none. Do not assume the project's language, framework or layout; rely only on the quest text,          say in the Assumptions section that the stack is unknown, and tell Claude to inspect the repository first."
+            .to_string()
     } else {
-        format!(
-            "The following project profile was collected locally and sanitized by Mushoku Guild. It is all you know about the project. \
-             Write a prompt that fits THIS stack, these conventions and this directory layout, and do not suggest different frameworks or tools than the ones listed.\n\n<project_context>\n{}\n</project_context>",
-            ctx.text
-        )
+        let mut b = format!(
+            "The following project information was collected locally and sanitized by Mushoku Guild. Write a prompt that fits THIS stack, these conventions and this layout,              and do not suggest different frameworks or tools than the ones listed. It may be a summary plus excerpts, not the whole project.
+
+<project_context>
+{context}
+</project_context>"
+        );
+        if let Some(f) = findings {
+            b.push_str(&format!("
+
+<deep_research_findings>
+Claude Code investigated the repository read-only for this quest. Base the prompt on these findings and keep their file references.
+{f}
+</deep_research_findings>"));
+        }
+        b
     };
-    format!("{REASONER_INSTRUCTIONS}\n\n{context}")
+    format!("{REASONER_INSTRUCTIONS}
+
+{body}")
 }
 
 fn fail(app: &AppHandle, db: &Db, task_id: i64, generation: u64, err: ProviderError) {
@@ -605,7 +649,7 @@ research below, if present. Never claim to have read, run or verified anything t
 'From the repository research' (cite the file paths given there), 'From you' (the owner said it) or 'My suggestion/assumption'. When you lack the evidence for a \
 good answer, say exactly what you would like inspected and offer: 'Want me to ask Claude to investigate?' (the owner has an Ask Claude for Context button).";
 
-fn start_turn(app: &AppHandle, state: &AppState, conversation_id: i64) -> u64 {
+fn start_turn(app: &AppHandle, state: &AppState, conversation_id: i64, mode: crate::context::Mode) -> u64 {
     let generation = state.chat_gen.fetch_add(1, Ordering::SeqCst) + 1;
     let cancel = Arc::new(AtomicBool::new(false));
     if let Some(old) = state.chat_cancel.lock().unwrap_or_else(|p| p.into_inner()).replace(cancel.clone()) {
@@ -621,12 +665,12 @@ fn start_turn(app: &AppHandle, state: &AppState, conversation_id: i64) -> u64 {
         data_dir: state.data_dir.clone(),
         base_instructions: CHAT_INSTRUCTIONS,
     };
-    std::thread::spawn(move || chat::run_turn(&env, conversation_id, generation, cancel));
+    std::thread::spawn(move || chat::run_turn(&env, conversation_id, generation, cancel, mode));
     generation
 }
 
 #[tauri::command]
-pub fn chat_send(app: AppHandle, state: State<'_, AppState>, conversation_id: i64, text: String) -> R<u64> {
+pub fn chat_send(app: AppHandle, state: State<'_, AppState>, conversation_id: i64, text: String, context_mode: Option<String>) -> R<u64> {
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err(e(ErrorKind::Other, "Type a message first."));
@@ -638,8 +682,12 @@ pub fn chat_send(app: AppHandle, state: State<'_, AppState>, conversation_id: i6
     if !state.chatgpt.status().connected {
         return Err(e(ErrorKind::NotConnected, "Connect ChatGPT first (Guild tab)."));
     }
+    let mode = context_mode.as_deref().map(crate::context::Mode::parse).unwrap_or_else(|| crate::context::remembered(&state.db, "chat"));
+    if mode != crate::context::Mode::Deep {
+        let _ = state.db.set_setting("ctx_mode_chat", mode.as_str()); // last-used choice; Deep is never remembered
+    }
     state.db.add_chat_message(conversation_id, "user", &text).map_err(|m| e(ErrorKind::Other, m))?;
-    Ok(start_turn(&app, &state, conversation_id))
+    Ok(start_turn(&app, &state, conversation_id, mode))
 }
 
 #[tauri::command]
@@ -732,7 +780,8 @@ pub async fn library_ask(app: AppHandle, state: State<'_, AppState>, project_id:
     );
     state.db.add_chat_message_kind(conv.id, "user", &body, "doc", "complete").map_err(|m| e(ErrorKind::Other, m))?;
     state.db.add_chat_message(conv.id, "user", &format!("I opened `{}`. Please read it, tell me briefly what it covers and anything notable, then I will ask follow-up questions.", doc.path)).map_err(|m| e(ErrorKind::Other, m))?;
-    let generation = start_turn(&app, &state, conv.id);
+    let mode = crate::context::remembered(&state.db, "chat");
+    let generation = start_turn(&app, &state, conv.id, mode);
     Ok(AskedDoc { open: chat_open_for(&state, conv), generation })
 }
 
@@ -977,16 +1026,15 @@ pub fn chat_cancel(state: State<'_, AppState>) {
 mod tests {
     use super::*;
 
-    fn info(status: &str, text: &str) -> ContextInfo {
-        ContextInfo { status: status.into(), text: text.into(), collected_at: 0, sources: vec![], truncated: false, error: Some("boom".into()) }
-    }
-
     #[test]
-    fn instructions_embed_context_or_state_it_is_unavailable() {
-        let with = build_instructions("p", "C:\\p", &info("ready", "React + Spring Boot"));
-        assert!(with.contains("<project_context>") && with.contains("React + Spring Boot"));
-        let without = build_instructions("p", "C:\\p", &info("unavailable", ""));
-        assert!(without.contains("PROJECT CONTEXT UNAVAILABLE") && !without.contains("<project_context>"));
+    fn instructions_follow_the_chosen_context_mode() {
+        use crate::context::Mode;
+        let none = build_instructions(Mode::None, "SHOULD NOT APPEAR", None);
+        assert!(none.contains("NO PROJECT CONTEXT") && !none.contains("<project_context>") && !none.contains("SHOULD NOT APPEAR"));
+        let cap = build_instructions(Mode::Capsule, "React + Spring Boot", None);
+        assert!(cap.contains("<project_context>") && cap.contains("React + Spring Boot") && !cap.contains("deep_research_findings"));
+        let deep = build_instructions(Mode::Deep, "capsule text", Some("src/a.rs: does X"));
+        assert!(deep.contains("<deep_research_findings>") && deep.contains("src/a.rs: does X"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { highlight } from "../domain/highlight.ts";
 import { isMermaid, parseMarkdown, type Block, type Inline } from "../domain/markdown.ts";
 import { MermaidBoundary } from "./Mermaid.tsx";
@@ -197,6 +197,8 @@ export function ChatPanel(props: {
   onDelete: (id: number) => void;
   onResearch: () => void;
   onCancelResearch: () => void;
+  /** the context selector, rendered above the message box */
+  contextNode?: ReactNode;
 }) {
   const { state, project } = props;
   const [text, setText] = useState("");
@@ -279,6 +281,7 @@ export function ChatPanel(props: {
           <div ref={end} />
         </div>
         <ErrorNote error={state.chatError} />
+        {props.contextNode}
         <div className="chat-input">
           <textarea
             rows={3}

@@ -92,3 +92,16 @@ test("provider setting parsing defaults to ChatGPT", () => {
   assert.equal(parseProvider("claude"), "claude");
   assert.equal(parseProvider("nonsense"), "chatgpt");
 });
+
+test("picking another recruited model starts a fresh draft instead of continuing the first model's conversation", () => {
+  const conv = { id: 5, title: "t", provider: "openrouter" as const, model: "a/one:free", createdAt: 1, updatedAt: 1 };
+  let s = reduceU(initialU, { type: "opened", conversation: conv, messages: [], hasMore: false });
+  assert.equal(s.model, "a/one:free");
+  s = reduceU(s, { type: "provider", provider: "openrouter", model: "a/one:free" });
+  assert.equal(s.current?.id, 5, "choosing the same model keeps the conversation");
+  s = reduceU(s, { type: "provider", provider: "openrouter", model: "b/two:free" });
+  assert.equal(s.current, null);
+  assert.equal(s.model, "b/two:free");
+  s = reduceU(s, { type: "provider", provider: "claude" });
+  assert.equal(s.model, "", "built-in providers carry no model id");
+});

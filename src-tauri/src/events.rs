@@ -47,6 +47,8 @@ pub enum AppEvent {
     ChatgptAuth { stage: String, url: Option<String> },
     ReasonerDelta { task_id: i64, generation: u64, text: String },
     ReasonerDone { task_id: i64, generation: u64, draft: Draft },
+    /// A visible status line during prompt generation (for example while Deep Research runs).
+    ReasonerNote { task_id: i64, generation: u64, text: String },
     ReasonerFailed { task_id: i64, generation: u64, kind: ErrorKind, message: String },
     TaskStatus { task_id: i64, status: String },
     RunStarted { task_id: i64, execution_id: i64, autopilot: bool },

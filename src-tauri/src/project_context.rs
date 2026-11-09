@@ -144,7 +144,7 @@ pub fn is_sensitive_name(name: &str) -> bool {
     false
 }
 
-fn is_denied_dir(name: &str) -> bool {
+pub(crate) fn is_denied_dir(name: &str) -> bool {
     DENY_DIRS.contains(&name.to_ascii_lowercase().as_str()) || (name.starts_with('.') && name != ".github")
 }
 

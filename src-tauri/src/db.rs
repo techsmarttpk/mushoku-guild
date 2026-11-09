@@ -107,7 +107,37 @@ CREATE TABLE todos (
   project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE INDEX todos_done ON todos(done, due);
+"#,
+r#"
+CREATE TABLE or_models (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, vendor TEXT NOT NULL, context_length INTEGER, description TEXT NOT NULL DEFAULT '',
+  input_modalities TEXT NOT NULL DEFAULT '[]', output_modalities TEXT NOT NULL DEFAULT '[]', caps TEXT NOT NULL DEFAULT '{}');
+CREATE TABLE guild_models (
+  id INTEGER PRIMARY KEY, provider TEXT NOT NULL CHECK (provider IN ('openrouter')), model_id TEXT NOT NULL, name TEXT NOT NULL,
+  vendor TEXT NOT NULL, seed INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available','unavailable')),
+  reason TEXT NOT NULL DEFAULT '', context_length INTEGER, description TEXT NOT NULL DEFAULT '', caps TEXT NOT NULL DEFAULT '{}',
+  active INTEGER NOT NULL DEFAULT 1, recruited_at INTEGER NOT NULL, UNIQUE (provider, model_id));
+-- uchat_conversations has a CHECK on provider and SQLite cannot alter it: both tables are rebuilt, data copied first.
+CREATE TABLE uchat_conversations2 (
+  id INTEGER PRIMARY KEY, title TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('chatgpt','claude','openrouter')),
+  model TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+INSERT INTO uchat_conversations2(id,title,provider,model,created_at,updated_at) SELECT id,title,provider,model,created_at,updated_at FROM uchat_conversations;
+CREATE TABLE uchat_messages2 (
+  id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL REFERENCES uchat_conversations2(id) ON DELETE CASCADE,
+  role TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'complete', created_at INTEGER NOT NULL);
+INSERT INTO uchat_messages2(id,conversation_id,role,body,status,created_at) SELECT id,conversation_id,role,body,status,created_at FROM uchat_messages;
+DROP TABLE uchat_messages;
+DROP TABLE uchat_conversations;
+ALTER TABLE uchat_conversations2 RENAME TO uchat_conversations;
+ALTER TABLE uchat_messages2 RENAME TO uchat_messages;
+CREATE INDEX uchat_conv_updated ON uchat_conversations(updated_at DESC, id DESC);
+CREATE INDEX uchat_msg_conv ON uchat_messages(conversation_id, id);
 "#];
+
+#[cfg(test)]
+pub fn migrations_for_test() -> &'static [&'static str] {
+    MIGRATIONS
+}
 
 /// Task lifecycle. `from -> to` pairs not listed here are rejected.
 pub fn transition_allowed(from: &str, to: &str) -> bool {

@@ -18,6 +18,10 @@ import { UniversalChat } from "./ui/UniversalChat.tsx";
 import { Todos, type TodoDraft } from "./ui/Todos.tsx";
 import type { Todo } from "./domain/todos.ts";
 import { initialU, parseProvider, reduceU } from "./domain/uchat.ts";
+import { GuildModels } from "./ui/Openrouter.tsx";
+import { ContextBudgetsCard, ContextPicker } from "./ui/ContextPicker.tsx";
+import { DEFAULT_MODE, sanitizeMode, type ContextMode } from "./domain/context.ts";
+import { STATE_LABEL, canChat, memberState, placeMembers, type GuildMember } from "./domain/guild.ts";
 import { readBase64 } from "./domain/attachments.ts";
 import { AtmosphereCard, BrowserCard, PermissionsCard, RepoTag, ServicesPanel } from "./ui/Extras.tsx";
 import { LibraryReader } from "./ui/Library.tsx";
@@ -36,6 +40,14 @@ const TAB_LABEL: Record<Tab, string> = { quest: "Quests", todo: "To-Do", chat: "
 export function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
   const [u, uDispatch] = useReducer(reduceU, initialU);
+  const [guild, setGuild] = useState<GuildMember[]>([]);
+  const [ctxQuest, setCtxQuest] = useState<ContextMode>(DEFAULT_MODE.quest);
+  const [ctxChat, setCtxChat] = useState<ContextMode>(DEFAULT_MODE.chat);
+  /** Universal Chat always starts with nothing shared; the choice is never restored */
+  const [ctxU, setCtxU] = useState<ContextMode>("none");
+  const [ctxUProject, setCtxUProject] = useState<number | null>(null);
+  const [picked, setPicked] = useState<{ id: number; x: number; y: number; headY: number } | null>(null);
+  const [removeAsk, setRemoveAsk] = useState(false);
   const [tab, setTab] = useState<Tab>("guild");
   const [newQuest, setNewQuest] = useState(false);
   // café renderer recovery: a rebuild recreates only the Pixi scene, never the application
@@ -121,6 +133,14 @@ export function App() {
         const currentProjectId = snap.projects.some((p) => p.id === current) ? current : (snap.projects[0]?.id ?? null);
         dispatch({ type: "patch", patch: { projects: snap.projects, settings: snap.settings, dbNote: snap.dbNote, chatgpt: snap.chatgpt, currentProjectId } });
         uDispatch({ type: "provider", provider: parseProvider(snap.settings["uchat_provider"]) });
+        void api.guildList().then(setGuild, () => undefined);
+        void api.contextPrefs().then(
+          (p) => {
+            setCtxQuest(sanitizeMode("quest", p.quest));
+            setCtxChat(sanitizeMode("chat", p.chat));
+          },
+          () => undefined,
+        );
         setTab(snap.chatgpt.connected ? "quest" : "guild");
       } catch (e) {
         fail(e);
@@ -239,6 +259,7 @@ export function App() {
     if (!host) return;
     const scene = new CafeScene();
     sceneRef.current = scene;
+    scene.onPick(setPicked);
     let cancelled = false;
     let unlisten: (() => void) | null = null;
     setSceneDead(null);
@@ -281,6 +302,20 @@ export function App() {
   useEffect(() => {
     syncRef.current(); // also redraws: the café canvas is hidden while the Library tab is open
   }, [tab]);
+  // Recruited models stand in the café. The scene keeps the list across its own rebuilds (sceneEpoch).
+  useEffect(() => {
+    sceneRef.current?.setGuild(guild.map((m) => ({ id: m.id, seed: m.seed, name: m.name, vendor: m.vendor, state: memberState(m) })));
+  }, [guild, sceneEpoch]);
+  useEffect(() => {
+    sceneRef.current?.select(picked?.id ?? null);
+    setRemoveAsk(false);
+    if (!picked) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setPicked(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [picked, sceneEpoch]);
   useEffect(() => {
     sceneRef.current?.refresh();
   }, [scale]);
@@ -515,13 +550,13 @@ export function App() {
   const generate = useCallback(
     async (taskId: number, note: string | null) => {
       try {
-        dispatch({ type: "generation_started", generation: await api.reasonerGenerate(taskId, note) });
+        dispatch({ type: "generation_started", generation: await api.reasonerGenerate(taskId, note, ctxQuest) });
         setTab("quest");
       } catch (e) {
         fail(e);
       }
     },
-    [fail],
+    [fail, ctxQuest],
   );
   const submitTask = (title: string, description: string, files: File[]) =>
     run("task", async () => {
@@ -638,7 +673,7 @@ export function App() {
     withChat(async () => {
       const conv = state.conversation;
       if (!conv) return;
-      const generation = await api.chatSend(conv.id, text);
+      const generation = await api.chatSend(conv.id, text, ctxChat);
       const now = Date.now();
       dispatch({ type: "chat_sending", generation, message: { id: -now, conversationId: conv.id, role: "user", body: text, createdAt: now, kind: "text", status: "complete" } });
     });
@@ -715,12 +750,14 @@ export function App() {
     if (tab === "uchat") void reloadU(u.query);
   }, [tab, u.query, u.streaming, u.current?.id, reloadU]);
   const uFail = (e: unknown): void => uDispatch({ type: "error", error: toProviderError(e) });
-  const uProvider = (p: UProvider): void => {
-    uDispatch({ type: "provider", provider: p });
+  const uProvider = (p: UProvider, model?: string): void => {
+    uDispatch({ type: "provider", provider: p, model });
+    if (p === "openrouter") return; // a model is picked per conversation; only the two built-in providers are remembered
     void api.settingsSet("uchat_provider", p).then(() => dispatch({ type: "patch", patch: { settings: { ...state.settings, uchat_provider: p } } }), uFail);
   };
   const uSend = (text: string): void => {
-    void api.uchatSend(u.current?.id ?? null, u.provider, text).then((s) => uDispatch({ type: "sending", conversation: s.conversation, message: s.message, generation: s.generation }), uFail);
+    const model = u.provider === "openrouter" ? (u.current?.model ?? u.model) : null;
+    void api.uchatSend(u.current?.id ?? null, u.provider, model, text, ctxU, ctxUProject).then((s) => uDispatch({ type: "sending", conversation: s.conversation, message: s.message, generation: s.generation }), uFail);
   };
   const uOpen = (id: number): void => {
     void api.uchatOpen(id).then((o) => uDispatch({ type: "opened", conversation: o.conversation, messages: o.messages, hasMore: o.hasMore }), uFail);
@@ -830,6 +867,70 @@ export function App() {
                   <small className="muted">{sceneDead.reason}</small>
                 </div>
               )}
+              {tab !== "library" && placeMembers(guild).overflow > 0 && (
+                <button className="cafe-more" onClick={() => setTab("guild")} title="The café has no more room: see every member in the Guild tab">
+                  +{placeMembers(guild).overflow} more in the Guild
+                </button>
+              )}
+              {picked && tab !== "library" && (() => {
+                const m = guild.find((g) => g.id === picked.id);
+                if (!m) return null;
+                const st = memberState(m);
+                const below = picked.headY * scale < 230;
+                return (
+                  <div
+                    className="member-pop"
+                    role="dialog"
+                    aria-label={`${m.name}, Guild member`}
+                    style={{ left: Math.min(Math.max(picked.x * scale, 130), SCENE_W * scale - 130), top: below ? (picked.y + 4) * scale : (picked.headY - 28) * scale, transform: below ? "translate(-50%, 0)" : "translate(-50%, -100%)" }}
+                  >
+                    <div className="row between">
+                      <strong>{m.name}</strong>
+                      <button className="link" onClick={() => setPicked(null)} aria-label="Close">
+                        ×
+                      </button>
+                    </div>
+                    <div className="small muted">OpenRouter · {m.vendor}</div>
+                    <code className="small">{m.modelId}</code>
+                    <div className={`or-state or-${st} small`} title={m.reason}>
+                      <i aria-hidden /> {STATE_LABEL[st]}
+                    </div>
+                    {st === "unavailable" && <div className="small">{m.reason}</div>}
+                    <div className="row">
+                      <button
+                        className="btn btn-primary"
+                        disabled={!canChat(m)}
+                        onClick={() => {
+                          uDispatch({ type: "provider", provider: "openrouter", model: m.modelId });
+                          setPicked(null);
+                          setTab("uchat");
+                        }}
+                      >
+                        Chat
+                      </button>
+                      <button className="btn" onClick={() => { setPicked(null); setTab("guild"); }}>
+                        Details
+                      </button>
+                      {removeAsk ? (
+                        <span className="small">
+                          Remove?{" "}
+                          <button className="link" onClick={() => { setPicked(null); void api.guildRemove(m.id).then(setGuild, fail); }}>
+                            yes
+                          </button>{" "}
+                          <button className="link" onClick={() => setRemoveAsk(false)}>
+                            no
+                          </button>
+                        </span>
+                      ) : (
+                        <button className="btn btn-quiet" onClick={() => setRemoveAsk(true)}>
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    {removeAsk && <small className="muted">Its conversations are kept.</small>}
+                  </div>
+                );
+              })()}
             </div>
           </div>
           {tab === "library" && (
@@ -971,6 +1072,15 @@ export function App() {
               onSelectProject={(p) => guard(() => void switchProject(p))}
               extra={
                 <>
+                  <GuildModels
+                    guild={guild}
+                    onGuild={setGuild}
+                    onChat={(m) => {
+                      uDispatch({ type: "provider", provider: "openrouter", model: m.modelId });
+                      setTab("uchat");
+                    }}
+                  />
+                  <ContextBudgetsCard />
                   <AtmosphereCard setting={atmoSetting} current={daypart} onMode={(m: AtmosphereMode) => void setSetting("cafe_mode", m)} onTheme={(d) => void setSetting("cafe_theme", d)} />
                   <BrowserCard
                     status={browser}
@@ -1034,6 +1144,7 @@ export function App() {
                         onFocus={(id) => void api.serviceFocus(id).catch(fail)}
                       />
                     }
+                    contextNode={<ContextPicker surface="quest" value={ctxQuest} onChange={setCtxQuest} projectId={pid} query={`${state.detail?.task.title ?? ""}\n${state.detail?.task.description ?? ""}`} disabled={state.detail?.task.status === "reasoning"} />}
                     onGenerate={(note) => void generate(state.detail?.task.id ?? 0, note)}
                     onStopReasoner={() => void api.reasonerCancel()}
                     onApprove={(b) => void approve(b)}
@@ -1052,7 +1163,7 @@ export function App() {
                   <button className="link" onClick={() => setNewQuest(false)}>
                     ← Quests
                   </button>
-                  <NewTask project={project} context={state.context} contextBusy={state.contextBusy} connected={state.chatgpt.connected} onSubmit={(t, d, f) => void submitTask(t, d, f)} busy={busy === "task"} />
+                  <NewTask project={project} contextNode={(q) => <ContextPicker surface="quest" value={ctxQuest} onChange={setCtxQuest} projectId={pid} query={q} />} connected={state.chatgpt.connected} onSubmit={(t, d, f) => void submitTask(t, d, f)} busy={busy === "task"} />
                   <ErrorNote error={state.error} onDismiss={() => dispatch({ type: "patch", patch: { error: null } })} />
                 </>
               ) : (
@@ -1073,6 +1184,7 @@ export function App() {
               query={chatQuery}
               onQuery={setChatQuery}
               onSend={(t) => void sendChat(t)}
+              contextNode={<ContextPicker surface="chat" value={ctxChat} onChange={setCtxChat} projectId={pid} query={state.chatMessages.filter((m) => m.role === "user").at(-1)?.body ?? ""} disabled={state.chatStreaming || state.chatResearching !== null} />}
               onStop={() => {
                 void api.chatCancel();
                 void api.researchCancel();
@@ -1093,6 +1205,23 @@ export function App() {
               u={u}
               chatgptConnected={state.chatgpt.connected}
               claudeReady={claudeReady}
+              guild={guild}
+              contextNode={
+                <ContextPicker
+                  surface="uchat"
+                  value={ctxU}
+                  onChange={(m) => {
+                    setCtxU(m);
+                    if (m !== "none" && ctxUProject === null) setCtxUProject(pid);
+                  }}
+                  projectId={ctxUProject}
+                  projects={state.projects}
+                  onProject={setCtxUProject}
+                  query={u.messages.filter((m) => m.role === "user").at(-1)?.body ?? ""}
+                  disabled={u.streaming}
+                  provider={u.provider}
+                />
+              }
               onProvider={uProvider}
               onQuery={(q) => uDispatch({ type: "query", query: q })}
               onSend={uSend}

@@ -1,6 +1,10 @@
 mod approver;
 mod attachments;
 mod todos;
+mod provider;
+mod openrouter;
+mod guild;
+mod context;
 mod uchat;
 mod autopilot;
 mod browser;
@@ -173,6 +177,19 @@ pub fn run() {
             todos::todo_save,
             todos::todo_set_done,
             todos::todo_delete,
+            openrouter::or_status,
+            openrouter::or_connect,
+            openrouter::or_test_connection,
+            openrouter::or_disconnect,
+            openrouter::or_refresh_catalog,
+            openrouter::or_catalog,
+            openrouter::or_test_model,
+            guild::guild_list,
+            guild::guild_recruit,
+            guild::guild_remove,
+            context::context_prefs,
+            context::context_budgets_set,
+            context::context_preview,
             uchat::uchat_list,
             uchat::uchat_open,
             uchat::uchat_older,

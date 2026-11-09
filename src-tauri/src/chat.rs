@@ -16,6 +16,7 @@ use tauri::AppHandle;
 
 use crate::chatgpt::ChatGpt;
 use crate::claude::{self, Policy, ProbeResult, RunKind, Runner, StartRequest};
+use crate::context::{assemble, Budgets, Mode};
 use crate::db::{ChatMessage, Db};
 use crate::events::{emit, truncate, AppEvent, ErrorKind};
 use crate::project_context::{redact, ContextCache, ContextInfo};
@@ -195,6 +196,28 @@ pub fn chat_instructions(base: &str, name: &str, path: &str, profile: &ContextIn
     s
 }
 
+/// Instructions for the non-Deep modes. `None` carries no project name, path or text at all.
+pub fn chat_instructions_for(mode: Mode, base: &str, context: &str) -> String {
+    match mode {
+        Mode::None => format!(
+            "{base}
+
+NO PROJECT CONTEXT: the owner chose to send none with this conversation. You know nothing about their repository beyond what they write here.              Do not guess its stack or code; ask, or suggest they switch the context mode. You cannot ask Claude to investigate in this mode."
+        ),
+        _ => format!(
+            "{base}
+
+The following was collected locally by Mushoku Guild from the owner's repository (secrets redacted). It is a summary and, if present, short excerpts: not the whole project.
+
+             <project_context>
+{context}
+</project_context>
+
+             You cannot ask Claude to investigate in this mode. If the excerpts are not enough, say what you would need and suggest the owner choose Deep Research."
+        ),
+    }
+}
+
 // ---------------------------------------------------------------- titles
 
 fn trivial(s: &str) -> bool {
@@ -238,7 +261,7 @@ pub struct TurnEnv {
     pub base_instructions: &'static str,
 }
 
-fn probe(env: &TurnEnv, project: &crate::db::Project, req: &ResearchRequest, cancel: &AtomicBool) -> ProbeResult {
+pub(crate) fn probe(env: &TurnEnv, project: &crate::db::Project, req: &ResearchRequest, cancel: &AtomicBool) -> ProbeResult {
     let fail = |m: &str| ProbeResult { status: "failed".into(), text: m.into(), files: vec![], note: Some(m.into()) };
     let Some(exe) = claude::locate(env.db.setting("claude_path").as_deref()) else { return fail("Claude Code was not found.") };
     if env.runner.is_running() {
@@ -286,7 +309,7 @@ fn probe(env: &TurnEnv, project: &crate::db::Project, req: &ResearchRequest, can
 }
 
 /// One full chat turn: stream the reply, optionally investigate with Claude (bounded), answer with the evidence.
-pub fn run_turn(env: &TurnEnv, conversation_id: i64, generation: u64, cancel: Arc<AtomicBool>) {
+pub fn run_turn(env: &TurnEnv, conversation_id: i64, generation: u64, cancel: Arc<AtomicBool>, mode: Mode) {
     let (app, db) = (&env.app, &env.db);
     let failed = |kind: ErrorKind, message: String| emit(app, AppEvent::ChatFailed { conversation_id, generation, kind, message });
     let Some(conv) = db.conversation(conversation_id) else { return failed(ErrorKind::NotFound, "unknown conversation".into()) };
@@ -294,16 +317,24 @@ pub fn run_turn(env: &TurnEnv, conversation_id: i64, generation: u64, cancel: Ar
     let mut probes_used = 0usize;
     loop {
         let root = Path::new(&project.path);
-        let mut profile = env.contexts.get(project.id, root, false);
-        if profile.status == "stale" {
-            profile = env.contexts.get(project.id, root, true);
-        }
-        let research = db.research(project.id).filter(|r| !r.report.is_empty());
-        let stale = research.as_ref().map(|r| !r.fingerprint.is_empty() && crate::project_context::fingerprint(root) != r.fingerprint).unwrap_or(false);
-        let can_research = probes_used < MAX_PROBES && root.is_dir() && claude::locate(db.setting("claude_path").as_deref()).is_some() && !env.runner.is_running();
-        let budget = can_research.then_some(MAX_PROBES - probes_used);
-        let instructions = chat_instructions(env.base_instructions, &project.name, &project.path, &profile, research.as_ref().map(|r| (r.report.as_str(), r.researched_at, stale)), budget);
         let all = db.chat_messages(conversation_id);
+        // Only Deep Research may start Claude Code; every other mode is assembled locally and sends no more than it shows.
+        let (instructions, can_research) = if mode == Mode::Deep {
+            let mut profile = env.contexts.get(project.id, root, false);
+            if profile.status == "stale" {
+                profile = env.contexts.get(project.id, root, true);
+            }
+            let research = db.research(project.id).filter(|r| !r.report.is_empty());
+            let stale = research.as_ref().map(|r| !r.fingerprint.is_empty() && crate::project_context::fingerprint(root) != r.fingerprint).unwrap_or(false);
+            let can = probes_used < MAX_PROBES && root.is_dir() && claude::locate(db.setting("claude_path").as_deref()).is_some() && !env.runner.is_running();
+            let budget = can.then_some(MAX_PROBES - probes_used);
+            (chat_instructions(env.base_instructions, &project.name, &project.path, &profile, research.as_ref().map(|r| (r.report.as_str(), r.researched_at, stale)), budget), can)
+        } else {
+            let asked: Vec<&str> = all.iter().rev().filter(|m| m.role == "user" && m.kind == "text").take(2).map(|m| m.body.as_str()).collect();
+            let ctx = assemble(mode, Some(root), &asked.join("
+"), Budgets::load(db));
+            (chat_instructions_for(mode, env.base_instructions, &ctx.text), false)
+        };
         let skip = all.len().saturating_sub(40);
         let messages = to_model_messages(&all[skip..]);
         let model = match db.setting("chatgpt_model").filter(|m| !m.is_empty()) {
