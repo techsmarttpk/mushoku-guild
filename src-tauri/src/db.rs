@@ -83,6 +83,21 @@ CREATE TABLE services (
 CREATE TABLE library_docs (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, path TEXT NOT NULL, title TEXT NOT NULL,
   size INTEGER NOT NULL, modified INTEGER NOT NULL, seen_at INTEGER NOT NULL, PRIMARY KEY (project_id, path));
+"#,
+r#"
+CREATE TABLE task_attachments (
+  id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, kind TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, stored TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE INDEX task_attachments_task ON task_attachments(task_id, id);
+CREATE TABLE uchat_conversations (
+  id INTEGER PRIMARY KEY, title TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('chatgpt','claude')),
+  model TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX uchat_conv_updated ON uchat_conversations(updated_at DESC, id DESC);
+CREATE TABLE uchat_messages (
+  id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL REFERENCES uchat_conversations(id) ON DELETE CASCADE,
+  role TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'complete', created_at INTEGER NOT NULL);
+CREATE INDEX uchat_msg_conv ON uchat_messages(conversation_id, id);
 "#];
 
 /// Task lifecycle. `from -> to` pairs not listed here are rejected.
@@ -341,7 +356,7 @@ impl Db {
         Db { conn: Mutex::new(conn), recovered_note: None }
     }
 
-    fn c(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(crate) fn c(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|p| p.into_inner())
     }
 
@@ -743,6 +758,34 @@ impl Db {
         let _ = self.c().execute("UPDATE services SET status=?2, ended_at=?3 WHERE id=?1", params![id, status, now_ms()]);
     }
 
+    // ---- quest attachments (metadata only; the files live in managed storage, see attachments.rs)
+    pub fn add_attachment(&self, task_id: i64, project_id: i64, name: &str, kind: &str, mime: &str, size: i64, ext: &str) -> Result<crate::attachments::AttachmentRow, String> {
+        let mut c = self.c();
+        let tx = c.transaction().map_err(|e| e.to_string())?;
+        tx.execute("INSERT INTO task_attachments(task_id,project_id,name,kind,mime,size,stored,created_at) VALUES(?1,?2,?3,?4,?5,?6,'',?7)", params![task_id, project_id, name, kind, mime, size, now_ms()]).map_err(|e| e.to_string())?;
+        let id = tx.last_insert_rowid();
+        let stored = crate::attachments::relative_path(project_id, task_id, id, ext);
+        tx.execute("UPDATE task_attachments SET stored=?2 WHERE id=?1", params![id, stored]).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        c.query_row(ATT_SQL_ONE, [id], att_row).map_err(|e| e.to_string())
+    }
+    pub fn attachments(&self, task_id: i64) -> Vec<crate::attachments::AttachmentRow> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT id,task_id,project_id,name,kind,mime,size,stored,created_at FROM task_attachments WHERE task_id=?1 ORDER BY id").expect("sql");
+        st.query_map([task_id], att_row).map(|r| r.filter_map(Result::ok).collect()).unwrap_or_default()
+    }
+    pub fn attachment(&self, id: i64) -> Option<crate::attachments::AttachmentRow> {
+        self.c().query_row(ATT_SQL_ONE, [id], att_row).optional().ok().flatten()
+    }
+    pub fn delete_attachment(&self, id: i64) {
+        let _ = self.c().execute("DELETE FROM task_attachments WHERE id=?1", [id]);
+    }
+    pub fn attachment_paths(&self) -> std::collections::HashSet<String> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT stored FROM task_attachments").expect("sql");
+        st.query_map([], |r| r.get::<_, String>(0)).map(|r| r.filter_map(Result::ok).collect()).unwrap_or_default()
+    }
+
     // ---- library metadata (documents are always read from disk; this only remembers what the shelves showed)
     pub fn remember_library(&self, project_id: i64, docs: &[LibraryMeta]) {
         let c = self.c();
@@ -762,6 +805,7 @@ impl Db {
         let _ = c.execute("UPDATE tasks SET status='failed' WHERE status='running'", []);
         let _ = c.execute("UPDATE services SET status='ended', ended_at=?1 WHERE status='running'", [now_ms()]);
         let _ = c.execute("UPDATE chat_messages SET status='interrupted' WHERE status='streaming'", []);
+        let _ = c.execute("UPDATE uchat_messages SET status='interrupted' WHERE status='streaming'", []);
         let _ = c.execute("UPDATE repo_research SET status=CASE WHEN report='' THEN 'failed' ELSE 'ready' END, note='Interrupted: Mushoku Guild closed during research.' WHERE status='researching'", []);
         let _ = c.execute(
             "UPDATE tasks SET status=CASE WHEN EXISTS(SELECT 1 FROM prompt_drafts d WHERE d.task_id=tasks.id) THEN 'prompt_ready' ELSE 'draft' END WHERE status='reasoning'",
@@ -770,6 +814,10 @@ impl Db {
     }
 }
 
+const ATT_SQL_ONE: &str = "SELECT id,task_id,project_id,name,kind,mime,size,stored,created_at FROM task_attachments WHERE id=?1";
+fn att_row(r: &rusqlite::Row) -> rusqlite::Result<crate::attachments::AttachmentRow> {
+    Ok(crate::attachments::AttachmentRow { id: r.get(0)?, task_id: r.get(1)?, project_id: r.get(2)?, name: r.get(3)?, kind: r.get(4)?, mime: r.get(5)?, size: r.get(6)?, stored: r.get(7)?, created_at: r.get(8)? })
+}
 const TASK_SQL_ONE: &str = "SELECT id,project_id,title,description,status,created_at,updated_at FROM tasks WHERE id=?1";
 const DRAFT_SQL_ONE: &str = "SELECT id,task_id,version,body,source,model,approved,created_at FROM prompt_drafts WHERE id=?1";
 

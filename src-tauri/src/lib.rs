@@ -1,4 +1,6 @@
 mod approver;
+mod attachments;
+mod uchat;
 mod autopilot;
 mod browser;
 mod chat;
@@ -60,6 +62,13 @@ pub fn run() {
             dev_seed(&db);
             let state = commands::AppState::new(db, dir);
             let db = state.db.clone();
+            {
+                // files whose quest or record is gone (crash between write and record, deleted quest) are removed
+                let (db, root) = (state.db.clone(), attachments::root(&state.data_dir));
+                std::thread::spawn(move || {
+                    attachments::sweep_orphans(&root, &db.attachment_paths());
+                });
+            }
             std::thread::spawn(move || {
                 // projects created before identities existed get one (Git root commit, else normalised path)
                 for p in db.projects().into_iter().filter(|p| p.identity.is_empty()) {
@@ -155,6 +164,17 @@ pub fn run() {
             repo_cmds::workspace_save,
             repo_cmds::cmd_run,
             repo_cmds::cmd_cancel,
+            commands::attachment_add,
+            commands::attachment_list,
+            commands::attachment_remove,
+            commands::attachment_preview,
+            uchat::uchat_list,
+            uchat::uchat_open,
+            uchat::uchat_older,
+            uchat::uchat_send,
+            uchat::uchat_cancel,
+            uchat::uchat_rename,
+            uchat::uchat_delete,
             commands::permission_decide
         ])
         .build(tauri::generate_context!())

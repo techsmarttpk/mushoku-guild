@@ -13,6 +13,7 @@ import type {
   TaskDetail,
 } from "../domain/types.ts";
 import type { PermissionRequest, UiState } from "../domain/store.ts";
+import { AttachmentPicker, type Pending } from "./Attachments.tsx";
 
 // ---------------------------------------------------------------- small shared pieces
 
@@ -314,18 +315,21 @@ const POLICY_TEXT: Record<Policy, { name: string; text: string }> = {
   accept_edits: { name: "Allow edits, ask for commands", text: "File edits inside the project are allowed automatically; shell commands still wait for your Allow." },
 };
 
-export function NewTask(props: { project: Project | null; context: ContextInfo | null; contextBusy: boolean; connected: boolean; onSubmit: (title: string, description: string) => void; busy: boolean }) {
+export function NewTask(props: { project: Project | null; context: ContextInfo | null; contextBusy: boolean; connected: boolean; onSubmit: (title: string, description: string, files: File[]) => void; busy: boolean }) {
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
+  const [files, setFiles] = useState<Pending[]>([]);
   if (!props.project) return <div className="note">Choose a project folder in the Guild tab first.</div>;
   return (
     <form
       className="stack"
       onSubmit={(e) => {
         e.preventDefault();
-        props.onSubmit(title, desc);
+        props.onSubmit(title, desc, files.map((f) => f.file));
+        for (const f of files) if (f.preview) URL.revokeObjectURL(f.preview);
         setTitle("");
         setDesc("");
+        setFiles([]);
       }}
     >
       <h3>New quest for {props.project.name}</h3>
@@ -338,6 +342,7 @@ export function NewTask(props: { project: Project | null; context: ContextInfo |
         What should be done?
         <textarea rows={6} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Describe the change, bug or feature in your own words…" />
       </label>
+      <AttachmentPicker items={files} onChange={setFiles} disabled={props.busy} />
       {!props.connected && <div className="note">Connect ChatGPT in the Guild tab so the Reasoner can write the Claude prompt.</div>}
       <button className="btn btn-primary" disabled={!desc.trim() || props.busy}>
         Create quest and ask ChatGPT

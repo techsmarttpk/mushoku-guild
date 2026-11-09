@@ -1,6 +1,7 @@
 // Smaller building blocks shared by several tabs: repository tag, per-repository permission profile,
 // browser integration card and the launched-services list.
 import { useState } from "react";
+import { DAYPARTS, DAYPART_HOURS, DAYPART_LABEL, type AtmosphereMode, type AtmosphereSetting, type Daypart } from "../domain/atmosphere.ts";
 import type { BrowserStatus, Policy, PrefsView, Project, ServiceView } from "../domain/types.ts";
 
 export function RepoTag({ project }: { project: Project | null }) {
@@ -204,6 +205,45 @@ export function ServicesPanel(props: {
           </div>
         </div>
       ))}
+    </section>
+  );
+}
+
+/** Guild-tab setting: follow the computer's clock (Automatic) or pin one of the four café atmospheres (Manual). */
+export function AtmosphereCard(props: { setting: AtmosphereSetting; current: Daypart; onMode: (m: AtmosphereMode) => void; onTheme: (d: Daypart) => void }) {
+  const { setting, current } = props;
+  return (
+    <section className="card">
+      <h3>Café Atmosphere</h3>
+      <p className="muted small">The café changes with the light outside. Switching never moves the characters or interrupts what they are doing.</p>
+      <div className="row" role="radiogroup" aria-label="Atmosphere mode">
+        <label className={`radio ${setting.mode === "auto" ? "on" : ""}`}>
+          <input type="radio" name="cafe-mode" checked={setting.mode === "auto"} onChange={() => props.onMode("auto")} />
+          <span>
+            <strong>Automatic</strong>
+            <small className="muted">Follows this computer's local time</small>
+          </span>
+        </label>
+        <label className={`radio ${setting.mode === "manual" ? "on" : ""}`}>
+          <input type="radio" name="cafe-mode" checked={setting.mode === "manual"} onChange={() => props.onMode("manual")} />
+          <span>
+            <strong>Manual</strong>
+            <small className="muted">Stays as you choose</small>
+          </span>
+        </label>
+      </div>
+      {setting.mode === "manual" && (
+        <div className="center-switch" role="group" aria-label="Choose the atmosphere">
+          {DAYPARTS.map((d) => (
+            <button key={d} className={`seg ${setting.manual === d ? "on" : ""}`} aria-pressed={setting.manual === d} title={DAYPART_HOURS[d]} onClick={() => props.onTheme(d)}>
+              {DAYPART_LABEL[d]}
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="muted small">
+        Now showing: <strong>{DAYPART_LABEL[current]}</strong> ({setting.mode === "auto" ? `automatic, ${DAYPART_HOURS[current]}` : "chosen by you"})
+      </p>
     </section>
   );
 }

@@ -17,6 +17,8 @@ import { BOARD_SLOT, FLAMES, H, MONITOR, SPOTS, STEAM, W, buildBackground, build
 import { bubbleSize, placeBubble, type Placement, type Rect } from "../domain/bubble.ts";
 import { CHAR_H, CHAR_W, buildBubble, buildSpeech, buildCharacter, buildTicket, type CharacterSprites, type FrameSet, type Who } from "./sprites.ts";
 import type { Pen } from "./pixel.ts";
+import { AtmosphereLayer } from "./atmosphere.ts";
+import type { Daypart } from "../domain/atmosphere.ts";
 
 export const SCENE_W = W;
 export const SCENE_H = H;
@@ -25,6 +27,8 @@ const WALK_MS = 66;
 const WORK_MS = 220;
 const IDLE_MS = 500;
 const WALK_PX = 3;
+/** While two atmospheres cross-fade (about 1.4 s) the timer runs a little faster, then returns to the normal cadence. */
+const FADE_MS_STEP = 90;
 
 const WORKING_POSES = new Set(["writing", "typing", "reading", "attention", "celebrate", "cheer", "error", "present", "thinking", "ready"]);
 
@@ -92,6 +96,10 @@ export class CafeScene {
   private speech: { who: Who; tex: Texture; at: Placement; alpha: number } | null = null;
   private speechTimers: ReturnType<typeof setTimeout>[] = [];
   private monitorTex: Texture[] = [];
+  private atmo: AtmosphereLayer | null = null;
+  private theme: Daypart = "morning";
+  private lastStepAt = 0;
+  private themed = false;
 
   async init(host: HTMLElement): Promise<void> {
     await this.app.init({
@@ -136,7 +144,11 @@ export class CafeScene {
       stage.addChild(s);
       return s;
     };
-    add(tex(buildBackground()), 0, 0);
+    const roomSprites: Sprite[] = [];
+    const actorSprites: Sprite[] = [];
+    this.atmo = new AtmosphereLayer(this.theme, { room: roomSprites, actors: actorSprites });
+    this.atmo.mountBelow(stage);
+    roomSprites.push(add(tex(buildBackground()), 0, 0));
 
     this.flameTex = texs([buildFlame(0), buildFlame(1)]);
     this.flameSprites = FLAMES.map((f) => add(this.flameTex[0] as Texture, f.x, f.y));
@@ -177,9 +189,11 @@ export class CafeScene {
     const executor = make("executor");
     this.actors = { reasoner, executor };
 
-    add(tex(buildForeground()), 0, 0);
+    roomSprites.push(add(tex(buildForeground()), 0, 0));
+    actorSprites.push(reasoner.sprite, executor.sprite);
     this.monitorTex = texs([buildMonitorFrame("off"), buildMonitorFrame("a"), buildMonitorFrame("b")]);
     this.monitor = add(this.monitorTex[0] as Texture, MONITOR.x, MONITOR.y);
+    this.atmo.mountAbove(stage);
     for (const a of [reasoner, executor]) {
       a.bubble.visible = false;
       stage.addChild(a.bubble);
@@ -187,6 +201,24 @@ export class CafeScene {
     this.speechSprite = new Sprite();
     this.speechSprite.visible = false;
     stage.addChild(this.speechSprite);
+  }
+
+  /**
+   * Switches the café atmosphere. Only the atmosphere layer changes: characters, poses, routes and timers are untouched.
+   * Before the scene exists (or while the window is hidden) the change is applied at once instead of cross-fading.
+   */
+  setTheme(next: Daypart): void {
+    const first = !this.themed;
+    this.theme = next;
+    this.themed = true;
+    if (!this.atmo) return;
+    this.atmo.setTheme(next, first || this.paused || !this.initialised);
+    this.paint();
+    this.schedule();
+  }
+
+  currentTheme(): Daypart {
+    return this.atmo?.current ?? this.theme;
   }
 
   /** Called whenever the projected real state changes. */
@@ -281,8 +313,10 @@ export class CafeScene {
   setPaused(paused: boolean): void {
     if (this.paused === paused) return;
     this.paused = paused;
-    if (paused) this.clearTimer();
-    else {
+    if (paused) {
+      this.clearTimer();
+      this.lastStepAt = 0;
+    } else {
       this.paint();
       this.schedule();
     }
@@ -298,6 +332,7 @@ export class CafeScene {
   private interval(): number {
     if (!this.actors) return IDLE_MS;
     const { reasoner, executor } = this.actors;
+    if (this.atmo?.transitioning) return FADE_MS_STEP;
     if (reasoner.route.length || executor.route.length) return WALK_MS;
     const busy = WORKING_POSES.has(reasoner.pose) || WORKING_POSES.has(executor.pose) || this.board === "active";
     return busy ? WORK_MS : IDLE_MS;
@@ -315,6 +350,9 @@ export class CafeScene {
 
   private step(): void {
     this.tickCount++;
+    const now = Date.now();
+    this.atmo?.step(this.tickCount, this.lastStepAt ? Math.min(400, now - this.lastStepAt) : 0);
+    this.lastStepAt = now;
     if (!this.actors) return;
     for (const a of Object.values(this.actors)) {
       const next = a.route[0];
@@ -404,7 +442,7 @@ export class CafeScene {
 
   private frameKey(): string {
     if (!this.actors) return "";
-    const parts: Array<string | number> = [this.board, this.ticket?.texture.uid ?? 0, this.steamSprite?.texture.uid ?? 0, this.flameSprites[0]?.texture.uid ?? 0, this.monitor?.texture.uid ?? 0, this.speechSprite?.visible ? this.speechSprite.texture.uid : 0, this.speechSprite?.x ?? 0, this.speechSprite?.alpha ?? 1];
+    const parts: Array<string | number> = [this.atmo?.key() ?? "", this.board, this.ticket?.texture.uid ?? 0, this.steamSprite?.texture.uid ?? 0, this.flameSprites[0]?.texture.uid ?? 0, this.monitor?.texture.uid ?? 0, this.speechSprite?.visible ? this.speechSprite.texture.uid : 0, this.speechSprite?.x ?? 0, this.speechSprite?.alpha ?? 1];
     for (const a of Object.values(this.actors)) parts.push(a.sprite.texture.uid, a.sprite.x, a.sprite.y, a.sprite.scale.x, a.bubble.visible ? a.bubble.texture.uid : 0, a.bubble.y);
     return parts.join("|");
   }

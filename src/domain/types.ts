@@ -142,6 +142,10 @@ export type AppEvent =
   | { type: "service_found"; taskId: number; service: ServiceRow }
   | { type: "research_activity"; projectId: number; activity: Activity }
   | { type: "research_finished"; projectId: number; research: { projectId: number; status: string; report: string; files: string[]; researchedAt: number; note: string | null } }
+  | { type: "u_chat_delta"; conversationId: number; generation: number; text: string }
+  | { type: "u_chat_done"; conversationId: number; generation: number; message: UMessage }
+  | { type: "u_chat_failed"; conversationId: number; generation: number; kind: ErrorKind; message: string }
+  | { type: "u_chat_title"; conversationId: number; title: string }
   | { type: "claude_rate"; fiveHour: number | null; sevenDay: number | null; status: string | null };
 
 export interface ContextInfo {
@@ -420,4 +424,51 @@ export interface OutputLine {
   runId?: number;
   stream: "out" | "err" | "info";
   text: string;
+}
+
+// ---- quest attachments
+export interface AttachmentView {
+  id: number;
+  name: string;
+  kind: "image" | "text" | "pdf";
+  mime: string;
+  size: number;
+}
+
+// ---- Universal Chat (global conversations, ChatGPT or Claude; never tied to a repository)
+export type UProvider = "chatgpt" | "claude";
+export interface UConv {
+  id: number;
+  title: string;
+  provider: UProvider;
+  model: string;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface UMessage {
+  id: number;
+  conversationId: number;
+  role: "user" | "assistant";
+  body: string;
+  status: "complete" | "streaming" | "interrupted";
+  createdAt: number;
+}
+export interface USummary {
+  id: number;
+  title: string;
+  provider: UProvider;
+  model: string;
+  updatedAt: number;
+  messageCount: number;
+  snippet: string;
+}
+export interface UOpen {
+  conversation: UConv;
+  messages: UMessage[];
+  hasMore: boolean;
+}
+export interface USent {
+  conversation: UConv;
+  message: UMessage;
+  generation: number;
 }

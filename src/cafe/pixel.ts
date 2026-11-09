@@ -12,6 +12,8 @@ export interface Pen {
   p(x: number, y: number, c: string): void;
   /** translucent rectangle */
   a(x: number, y: number, w: number, h: number, c: string, alpha: number): void;
+  /** erase to fully transparent (used for window glass, which the outdoor scenery shows through) */
+  clear(x: number, y: number, w: number, h: number): void;
 }
 
 export function newPen(w: number, h: number): Pen {
@@ -38,6 +40,9 @@ export function newPen(w: number, h: number): Pen {
       ctx.fillStyle = c;
       ctx.fillRect(Math.round(x), Math.round(y), rw, rh);
       ctx.globalAlpha = 1;
+    },
+    clear(x, y, rw, rh) {
+      ctx.clearRect(Math.round(x), Math.round(y), rw, rh);
     },
   };
 }

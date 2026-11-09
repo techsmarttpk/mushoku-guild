@@ -22,6 +22,8 @@ export const FLAMES = [
   { x: 186, y: 34 },
 ];
 export const STEAM = [{ x: 142, y: 98 }];
+/** Top-left of each window's 32x26 glass. */
+export const WINDOWS = [{ x: 12, y: 6 }, { x: 190, y: 6 }] as const;
 
 function wall(p: Pen): void {
   const r = rng(11);
@@ -77,23 +79,13 @@ function floor(p: Pen): void {
   // soft shadow under the wall and window light shafts
   p.a(0, FLOOR_Y, W, 3, C.ink, 0.35);
   p.a(0, FLOOR_Y + 3, W, 2, C.ink, 0.15);
-  for (const wx of [12, 190]) {
-    for (let i = 0; i < 26; i++) p.a(wx + i * 0.8 + 6, FLOOR_Y + 3 + i, 22 - (i >> 2), 1, C.sun, 0.13);
-  }
 }
 
 function windowAt(p: Pen, x: number, y: number): void {
   p.r(x - 2, y - 2, 36, 30, C.beam);
   p.r(x - 2, y - 2, 36, 1, C.beamHi);
-  p.r(x, y, 32, 26, C.sky);
-  p.r(x, y + 12, 32, 14, C.sky2);
-  // distant hills and a cloud
-  p.r(x, y + 17, 32, 9, C.green3);
-  p.r(x + 4, y + 15, 12, 3, C.green3);
-  p.r(x + 18, y + 14, 14, 4, C.green);
-  p.r(x + 20, y + 3, 8, 2, C.white);
-  p.r(x + 22, y + 2, 5, 1, C.white);
-  p.a(x, y, 32, 26, C.sun, 0.12);
+  // The glass is left transparent: the outdoor scenery of the current daypart is drawn behind it (atmosphere.ts).
+  p.clear(x, y, 32, 26);
   // frame bars and sill
   p.r(x + 15, y, 2, 26, C.beam);
   p.r(x, y + 11, 32, 2, C.beam);
@@ -371,8 +363,7 @@ export function buildBackground(): Pen {
   const p = newPen(W, H);
   wall(p);
   floor(p);
-  windowAt(p, 12, 6);
-  windowAt(p, 190, 6);
+  for (const win of WINDOWS) windowAt(p, win.x, win.y);
   bookcase(p, 236, 4);
   shelves(p, 50, 6, 56);
   banner(p, 80, 34 - 6);

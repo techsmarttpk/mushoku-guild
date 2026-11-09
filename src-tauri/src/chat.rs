@@ -253,6 +253,7 @@ fn probe(env: &TurnEnv, project: &crate::db::Project, req: &ResearchRequest, can
         project_dir: std::path::PathBuf::from(&project.path),
         kind: RunKind::Probe { project_id: project.id },
         prompt: build_probe_prompt(req),
+        attachments: vec![],
         policy: Policy::Research,
         autopilot: false,
         model,

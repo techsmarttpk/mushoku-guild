@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { CafeScene, SCENE_H, SCENE_W } from "./cafe/CafeScene.ts";
 import { LibraryScene } from "./cafe/LibraryScene.ts";
+import { msUntilNextDaypart, parseSetting, resolveDaypart, type AtmosphereMode, type Daypart } from "./domain/atmosphere.ts";
 import { projectScene } from "./domain/scene.ts";
+import { filterDocs, matchSummary } from "./domain/library.ts";
 import { neighbour } from "./domain/shelf.ts";
 import { initialState, reduce } from "./domain/store.ts";
-import { type DocContent, type LibraryMeta, type Model, type Policy, type Project, type ProviderError, type BrowserStatus } from "./domain/types.ts";
+import { type DocContent, type LibraryMeta, type Model, type Policy, type Project, type ProviderError, type BrowserStatus, type UProvider } from "./domain/types.ts";
 import { createWelcomeGate, pickWelcome } from "./domain/welcome.ts";
 import { api, onAppEvent, onWindowMinimized, toProviderError } from "./ipc.ts";
 import { ChatPanel } from "./ui/ChatPanel.tsx";
-import { BrowserCard, PermissionsCard, RepoTag, ServicesPanel } from "./ui/Extras.tsx";
+import { AttachmentStrip } from "./ui/Attachments.tsx";
+import { UniversalChat } from "./ui/UniversalChat.tsx";
+import { initialU, parseProvider, reduceU } from "./domain/uchat.ts";
+import { readBase64 } from "./domain/attachments.ts";
+import { AtmosphereCard, BrowserCard, PermissionsCard, RepoTag, ServicesPanel } from "./ui/Extras.tsx";
 import { LibraryReader } from "./ui/Library.tsx";
 import { ActivityFeed, ErrorNote, GuildPanel, NewTask, PermissionDialog, TaskView } from "./ui/panels.tsx";
 import { QuestHistory } from "./ui/Quests.tsx";
@@ -19,11 +25,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 /** One greeting per application launch; React re-renders and effect re-runs cannot repeat it. */
 const welcomeGate = createWelcomeGate();
 
-type Tab = "quest" | "chat" | "library" | "repo" | "guild";
-const TAB_LABEL: Record<Tab, string> = { quest: "Quests", chat: "Chat", library: "Library", repo: "Repo", guild: "Guild" };
+type Tab = "quest" | "chat" | "uchat" | "library" | "repo" | "guild";
+const TAB_LABEL: Record<Tab, string> = { quest: "Quests", chat: "Guild Chat", uchat: "Universal Chat", library: "Library", repo: "Repo", guild: "Guild" };
 
 export function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
+  const [u, uDispatch] = useReducer(reduceU, initialU);
   const [tab, setTab] = useState<Tab>("guild");
   const [newQuest, setNewQuest] = useState(false);
   const [models, setModels] = useState<Model[]>([]);
@@ -42,6 +49,8 @@ export function App() {
   const [libHover, setLibHover] = useState(-1);
   const [libLoading, setLibLoading] = useState(false);
   const [libError, setLibError] = useState<string | null>(null);
+  const [libQuery, setLibQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const libHostRef = useRef<HTMLDivElement>(null);
@@ -84,13 +93,17 @@ export function App() {
     let off: (() => void) | null = null;
     let cancelled = false;
     void (async () => {
-      off = await onAppEvent((event) => dispatch({ type: "event", event }));
+      off = await onAppEvent((event) => {
+        dispatch({ type: "event", event });
+        uDispatch({ type: "event", event });
+      });
       if (cancelled) off();
       try {
         const snap = await api.snapshot();
         const current = Number(snap.settings["current_project_id"] ?? "");
         const currentProjectId = snap.projects.some((p) => p.id === current) ? current : (snap.projects[0]?.id ?? null);
         dispatch({ type: "patch", patch: { projects: snap.projects, settings: snap.settings, dbNote: snap.dbNote, chatgpt: snap.chatgpt, currentProjectId } });
+        uDispatch({ type: "provider", provider: parseProvider(snap.settings["uchat_provider"]) });
         setTab(snap.chatgpt.connected ? "quest" : "guild");
       } catch (e) {
         fail(e);
@@ -237,9 +250,41 @@ export function App() {
     syncRef.current();
   }, [tab]);
 
+  // ---------------------------------------------------------------- café atmosphere (local clock, never UTC)
+  const atmoSetting = useMemo(() => parseSetting(state.settings), [state.settings]);
+  const [clock, setClock] = useState(() => new Date());
+  useEffect(() => {
+    if (atmoSetting.mode !== "auto") return;
+    let timer: ReturnType<typeof setTimeout>;
+    const arm = (): void => {
+      timer = setTimeout(() => {
+        setClock(new Date());
+        arm();
+      }, msUntilNextDaypart(new Date()) + 500);
+    };
+    // timers can be late after sleep or a throttled background window: re-read the clock whenever the app is looked at again
+    const refresh = (): void => {
+      if (!document.hidden) setClock(new Date());
+    };
+    setClock(new Date());
+    arm();
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [atmoSetting.mode]);
+  const daypart: Daypart = resolveDaypart(atmoSetting, clock);
+  const settingsReady = Object.keys(state.settings).length > 0 || state.projects.length > 0 || state.chatgpt.connected;
+  useEffect(() => {
+    if (settingsReady || atmoSetting.mode === "auto") sceneRef.current?.setTheme(daypart);
+  }, [daypart, settingsReady, atmoSetting.mode]);
+
   const sceneState = useMemo(
-    () => projectScene({ status, streaming: state.streaming, permissionPending: state.permissions.length > 0, currentTool: state.currentTool, researching: state.research?.status === "researching" || state.chatResearching !== null, chatting: state.chatStreaming }),
-    [status, state.streaming, state.permissions.length, state.currentTool, state.research?.status, state.chatStreaming, state.chatResearching],
+    () => projectScene({ status, streaming: state.streaming, permissionPending: state.permissions.length > 0, currentTool: state.currentTool, researching: state.research?.status === "researching" || state.chatResearching !== null, chatting: state.chatStreaming || u.streaming }),
+    [status, state.streaming, state.permissions.length, state.currentTool, state.research?.status, state.chatStreaming, state.chatResearching, u.streaming],
   );
   useEffect(() => {
     sceneRef.current?.setState(sceneState);
@@ -283,8 +328,31 @@ export function App() {
     },
     [pid],
   );
-  const docsRef = useRef(libDocs);
-  docsRef.current = libDocs;
+  // The shelf shows only the matching books; search runs over the already-listed metadata, never over the disk.
+  const visibleDocs = useMemo(() => filterDocs(libDocs, libQuery), [libDocs, libQuery]);
+  const docsRef = useRef(visibleDocs);
+  docsRef.current = visibleDocs;
+  // a repository is a workspace: its search text, open book and shelves must not leak into the next one
+  useEffect(() => {
+    setLibQuery("");
+    setLibDoc(null);
+    setLibDocs([]);
+    setLibHover(-1);
+    setLibError(null);
+  }, [pid]);
+  useEffect(() => {
+    if (tab !== "library") return;
+    const onKey = (e: KeyboardEvent): void => {
+      const typing = e.target instanceof HTMLElement && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA");
+      if (((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") || (e.key === "/" && !typing)) {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [tab]);
   useEffect(() => {
     const host = libHostRef.current;
     if (tab !== "library" || !host) return;
@@ -307,21 +375,22 @@ export function App() {
     };
   }, [tab, openDoc]);
   useEffect(() => {
-    libRef.current?.setDocs(libDocs, libDoc?.path ?? null);
-  }, [libDocs, libDoc?.path]);
+    libRef.current?.setDocs(visibleDocs, libDoc?.path ?? null);
+    setLibHover(-1);
+  }, [visibleDocs, libDoc?.path]);
   const onShelfKey = (e: React.KeyboardEvent): void => {
     const map: Record<string, "left" | "right" | "up" | "down"> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
     const dir = map[e.key];
     if (dir) {
       e.preventDefault();
-      const cur = libDoc ? libDocs.findIndex((d) => d.path === libDoc.path) : libHover;
-      const next = neighbour(cur, dir, libDocs.length);
+      const cur = libDoc ? visibleDocs.findIndex((d) => d.path === libDoc.path) : libHover;
+      const next = neighbour(cur, dir, visibleDocs.length);
       if (next >= 0) {
         libRef.current?.setSelectedIndex(next);
         setLibHover(next);
       }
     } else if (e.key === "Enter" && libHover >= 0) {
-      const d = libDocs[libHover];
+      const d = visibleDocs[libHover];
       if (d) void openDoc(d.path);
     } else if (e.key === "Escape") setLibDoc(null);
   };
@@ -358,10 +427,19 @@ export function App() {
     },
     [fail],
   );
-  const submitTask = (title: string, description: string) =>
+  const submitTask = (title: string, description: string, files: File[]) =>
     run("task", async () => {
       if (!project) return;
       const t = await api.taskCreate(project.id, title, description);
+      const refused: string[] = [];
+      for (const f of files) {
+        try {
+          await api.attachmentAdd(t.id, f.name, await readBase64(f));
+        } catch (e) {
+          refused.push(toProviderError(e).message);
+        }
+      }
+      if (refused.length) fail({ kind: "other", message: `Some attachments were not added: ${refused.join(" ")}` });
       await reloadQuests(project.id);
       dispatch({ type: "select_task", detail: await api.taskGet(t.id) });
       setNewQuest(false);
@@ -505,6 +583,46 @@ export function App() {
     return () => clearInterval(t);
   }, [pid, state.research?.status]);
 
+  // ---------------------------------------------------------------- Universal Chat (global: no repository, own state and storage)
+  const reloadU = useCallback(async (query: string) => {
+    try {
+      uDispatch({ type: "list", convs: await api.uchatList(query) });
+    } catch {
+      /* the list refreshes again on the next change */
+    }
+  }, []);
+  useEffect(() => {
+    if (tab === "uchat") void reloadU(u.query);
+  }, [tab, u.query, u.streaming, u.current?.id, reloadU]);
+  const uFail = (e: unknown): void => uDispatch({ type: "error", error: toProviderError(e) });
+  const uProvider = (p: UProvider): void => {
+    uDispatch({ type: "provider", provider: p });
+    void api.settingsSet("uchat_provider", p).then(() => dispatch({ type: "patch", patch: { settings: { ...state.settings, uchat_provider: p } } }), uFail);
+  };
+  const uSend = (text: string): void => {
+    void api.uchatSend(u.current?.id ?? null, u.provider, text).then((s) => uDispatch({ type: "sending", conversation: s.conversation, message: s.message, generation: s.generation }), uFail);
+  };
+  const uOpen = (id: number): void => {
+    void api.uchatOpen(id).then((o) => uDispatch({ type: "opened", conversation: o.conversation, messages: o.messages, hasMore: o.hasMore }), uFail);
+  };
+  const uOlder = (): void => {
+    const first = u.messages[0];
+    if (!u.current || !first) return;
+    void api.uchatOlder(u.current.id, first.id).then(([messages, hasMore]) => uDispatch({ type: "older", messages, hasMore }), uFail);
+  };
+  const uRename = (id: number, title: string): void => {
+    void api.uchatRename(id, title).then(() => {
+      uDispatch({ type: "event", event: { type: "u_chat_title", conversationId: id, title } });
+      return reloadU(u.query);
+    }, uFail);
+  };
+  const uDelete = (id: number): void => {
+    void api.uchatDelete(id).then(() => {
+      if (u.current?.id === id) uDispatch({ type: "draft" });
+      return reloadU(u.query);
+    }, uFail);
+  };
+
   // ---------------------------------------------------------------- projects, settings, browser
   const guard = (fn: () => void): void => (dirtyRef.current > 0 ? setPendingSwitch(() => fn) : fn());
   const switchProject = (p: Project | null) =>
@@ -545,7 +663,7 @@ export function App() {
     () => state.activity.filter((a) => ["tool_use", "tool_result", "tool_error", "permission_auto", "permission_decision", "result", "error", "cancelled", "init"].includes(a.kind)).slice(-300).map((a) => `${a.title}${a.detail ? ` — ${a.detail.split("\n")[0]?.slice(0, 160)}` : ""}`),
     [state.activity],
   );
-  const hoveredDoc = libHover >= 0 ? (libDocs[libHover] ?? null) : null;
+  const hoveredDoc = libHover >= 0 ? (visibleDocs[libHover] ?? null) : null;
   const questOpen = state.detail !== null;
 
   return (
@@ -579,6 +697,38 @@ export function App() {
 
       <main className={`cols ${tab === "repo" ? "repo-mode" : ""}`}>
         <section className="left">
+          {tab === "library" && project && (
+            <div className="lib-search" role="search">
+              <div className="lib-search-row">
+                <input
+                  ref={searchRef}
+                  type="search"
+                  value={libQuery}
+                  placeholder="Search books by title, file name or path…  ( / or Ctrl+F )"
+                  aria-label="Search the library"
+                  onChange={(e) => setLibQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      e.stopPropagation();
+                      if (libQuery) setLibQuery("");
+                      else searchRef.current?.blur();
+                    }
+                  }}
+                />
+                {libQuery && (
+                  <button className="btn btn-quiet" onClick={() => { setLibQuery(""); searchRef.current?.focus(); }} aria-label="Clear search">
+                    ✕ Clear
+                  </button>
+                )}
+              </div>
+              <div className="lib-count muted small" aria-live="polite">{matchSummary(visibleDocs.length, libDocs.length, libQuery)}</div>
+              {libQuery.trim() && visibleDocs.length === 0 && libDocs.length > 0 && (
+                <div className="lib-empty">
+                  <span aria-hidden>📚</span> No book on these shelves answers to “{libQuery.trim()}”. The librarian checked every shelf twice. Try a shorter word, or clear the search.
+                </div>
+              )}
+            </div>
+          )}
           <div className="cafe-slot" ref={wrapRef}>
             <div className="cafe" style={{ "--w": `${Math.round(SCENE_W * scale)}px`, "--h": `${Math.round(SCENE_H * scale)}px` } as React.CSSProperties}>
               <div ref={hostRef} className="cafe-canvas" style={{ display: tab === "library" ? "none" : "block" }} />
@@ -591,10 +741,17 @@ export function App() {
                 <h2 className="panel-title">Research activity {(state.research?.status === "researching" || state.chatResearching !== null) && <small>· Claude is reading the repository</small>}</h2>
                 <ActivityFeed items={state.researchActivity} empty="When ChatGPT asks Claude to investigate (or you press Ask Claude for Context), every file Claude reads appears here. Research is read-only." />
               </>
+            ) : tab === "uchat" ? (
+              <>
+                <h2 className="panel-title">Universal Chat <small>· not tied to any repository</small></h2>
+                <div className="muted pad">
+                  Your own conversations with ChatGPT or Claude. They are global: switching repositories does not change them, and no project is ever shared with them. ChatGPT uses your existing sign-in; Claude uses the installed Claude Code in a no-tools, conversation-only mode.
+                </div>
+              </>
             ) : tab === "library" ? (
               <>
                 <h2 className="panel-title">Shelf <RepoTag project={project} /></h2>
-                <div className="muted pad">{hoveredDoc ? `${hoveredDoc.title}  ·  ${hoveredDoc.path}` : libDocs.length ? `${libDocs.length} books. Hover for details, click to read.` : "Nothing on the shelves yet."}</div>
+                <div className="muted pad">{hoveredDoc ? `${hoveredDoc.title}  ·  ${hoveredDoc.path}` : libDocs.length ? `${matchSummary(visibleDocs.length, libDocs.length, libQuery)}. Hover for details, click to read.` : "Nothing on the shelves yet."}</div>
               </>
             ) : (
               <>
@@ -605,7 +762,7 @@ export function App() {
           </div>
         </section>
 
-        <section className={`right panel ${tab === "chat" ? "wide" : ""} ${tab === "repo" ? "repo-full" : ""}`}>
+        <section className={`right panel ${tab === "chat" || tab === "uchat" ? "wide" : ""} ${tab === "repo" ? "repo-full" : ""}`}>
           {state.dbNote && <div className="note">{state.dbNote}</div>}
           {tab === "guild" && (
             <GuildPanel
@@ -661,6 +818,7 @@ export function App() {
               onSelectProject={(p) => guard(() => void switchProject(p))}
               extra={
                 <>
+                  <AtmosphereCard setting={atmoSetting} current={daypart} onMode={(m: AtmosphereMode) => void setSetting("cafe_mode", m)} onTheme={(d) => void setSetting("cafe_theme", d)} />
                   <BrowserCard
                     status={browser}
                     busy={busy === "setting"}
@@ -693,6 +851,7 @@ export function App() {
                     </button>
                     <RepoTag project={project} />
                   </div>
+                  <AttachmentStrip taskId={state.detail.task.id} />
                   <TaskView
                     state={state}
                     detail={state.detail}
@@ -740,7 +899,7 @@ export function App() {
                   <button className="link" onClick={() => setNewQuest(false)}>
                     ← Quests
                   </button>
-                  <NewTask project={project} context={state.context} contextBusy={state.contextBusy} connected={state.chatgpt.connected} onSubmit={(t, d) => void submitTask(t, d)} busy={busy === "task"} />
+                  <NewTask project={project} context={state.context} contextBusy={state.contextBusy} connected={state.chatgpt.connected} onSubmit={(t, d, f) => void submitTask(t, d, f)} busy={busy === "task"} />
                   <ErrorNote error={state.error} onDismiss={() => dispatch({ type: "patch", patch: { error: null } })} />
                 </>
               ) : (
@@ -771,6 +930,23 @@ export function App() {
               onDelete={(id) => void deleteConv(id)}
               onResearch={() => void startResearch()}
               onCancelResearch={() => void api.researchCancel()}
+            />
+          )}
+
+          {tab === "uchat" && (
+            <UniversalChat
+              u={u}
+              chatgptConnected={state.chatgpt.connected}
+              claudeReady={claudeReady}
+              onProvider={uProvider}
+              onQuery={(q) => uDispatch({ type: "query", query: q })}
+              onSend={uSend}
+              onStop={() => void api.uchatCancel()}
+              onNew={() => uDispatch({ type: "draft" })}
+              onOpen={uOpen}
+              onRename={uRename}
+              onDelete={uDelete}
+              onOlder={uOlder}
             />
           )}
 

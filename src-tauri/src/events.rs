@@ -70,6 +70,10 @@ pub enum AppEvent {
     ChatResearching { conversation_id: i64, generation: u64, objective: String },
     ChatAgentMessage { conversation_id: i64, generation: u64, message: ChatMessage },
     ChatTitle { conversation_id: i64, title: String },
+    UChatDelta { conversation_id: i64, generation: u64, text: String },
+    UChatDone { conversation_id: i64, generation: u64, message: crate::uchat::UMessage },
+    UChatFailed { conversation_id: i64, generation: u64, kind: ErrorKind, message: String },
+    UChatTitle { conversation_id: i64, title: String },
     ClaudeRate { five_hour: Option<f64>, seven_day: Option<f64>, status: Option<String> },
 }
 

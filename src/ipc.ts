@@ -38,6 +38,12 @@ import type {
   Snapshot,
   Task,
   TaskDetail,
+  AttachmentView,
+  UMessage,
+  UOpen,
+  USent,
+  USummary,
+  UProvider,
 } from "./domain/types.ts";
 
 /** Rust-published window state: WebView2 itself does not report minimisation to the page. */
@@ -130,5 +136,16 @@ export const api = {
   chatSend: (conversationId: number, text: string) => invoke<number>("chat_send", { conversationId, text }),
   chatCancel: () => invoke<void>("chat_cancel"),
   runCancel: () => invoke<boolean>("run_cancel"),
+  attachmentAdd: (taskId: number, name: string, data: string) => invoke<AttachmentView>("attachment_add", { taskId, name, data }),
+  attachmentList: (taskId: number) => invoke<AttachmentView[]>("attachment_list", { taskId }),
+  attachmentRemove: (taskId: number, id: number) => invoke<void>("attachment_remove", { taskId, id }),
+  attachmentPreview: (taskId: number, id: number) => invoke<string>("attachment_preview", { taskId, id }),
+  uchatList: (query: string) => invoke<USummary[]>("uchat_list", { query }),
+  uchatOpen: (conversationId: number) => invoke<UOpen>("uchat_open", { conversationId }),
+  uchatOlder: (conversationId: number, before: number) => invoke<[UMessage[], boolean]>("uchat_older", { conversationId, before }),
+  uchatSend: (conversationId: number | null, provider: UProvider, text: string) => invoke<USent>("uchat_send", { conversationId, provider, text }),
+  uchatCancel: () => invoke<void>("uchat_cancel"),
+  uchatRename: (conversationId: number, title: string) => invoke<void>("uchat_rename", { conversationId, title }),
+  uchatDelete: (conversationId: number) => invoke<void>("uchat_delete", { conversationId }),
   permissionDecide: (requestId: string, allow: boolean) => invoke<boolean>("permission_decide", { requestId, allow }),
 };

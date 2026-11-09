@@ -30,6 +30,8 @@ pub struct AppState {
     gen_cancel: Mutex<Option<(i64, Arc<AtomicBool>)>>,
     chat_gen: AtomicU64,
     chat_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    pub uchat_gen: AtomicU64,
+    pub uchat_cancel: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -47,6 +49,8 @@ impl AppState {
             gen_cancel: Mutex::new(None),
             chat_gen: AtomicU64::new(0),
             chat_cancel: Mutex::new(None),
+            uchat_gen: AtomicU64::new(0),
+            uchat_cancel: Mutex::new(None),
         }
     }
 }
@@ -57,7 +61,7 @@ fn e(kind: ErrorKind, m: impl Into<String>) -> ProviderError {
     ProviderError::new(kind, m)
 }
 
-const SETTING_KEYS: [&str; 7] = ["chatgpt_model", "claude_model", "claude_path", "max_turns", "policy", "current_project_id", "browser_enabled"];
+const SETTING_KEYS: [&str; 10] = ["chatgpt_model", "claude_model", "claude_path", "max_turns", "policy", "current_project_id", "browser_enabled", "cafe_mode", "cafe_theme", "uchat_provider"];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +94,9 @@ pub fn settings_set(state: State<'_, AppState>, key: String, value: String) -> R
         "max_turns" if value.parse::<u32>().map(|n| (1..=200).contains(&n)) != Ok(true) => return Err(e(ErrorKind::Other, "max turns must be 1-200")),
         "policy" if Policy::parse(&value).is_none() => return Err(e(ErrorKind::Other, "unknown policy")),
         "browser_enabled" if value != "0" && value != "1" => return Err(e(ErrorKind::Other, "browser_enabled must be 0 or 1")),
+        "cafe_mode" if value != "auto" && value != "manual" => return Err(e(ErrorKind::Other, "cafe_mode must be auto or manual")),
+        "cafe_theme" if !["morning", "noon", "evening", "night"].contains(&value.as_str()) => return Err(e(ErrorKind::Other, "unknown café atmosphere")),
+        "uchat_provider" if value != "chatgpt" && value != "claude" => return Err(e(ErrorKind::Other, "uchat_provider must be chatgpt or claude")),
         "claude_model" if !claude::MODEL_CHOICES.contains(&value.as_str()) => return Err(e(ErrorKind::Other, "unknown Claude model choice")),
         _ => {}
     }
@@ -247,7 +254,7 @@ pub fn reasoner_generate(app: AppHandle, state: State<'_, AppState>, task_id: i6
         let instructions = build_instructions(&project.name, &project.path, &ctx);
         let mut messages = db.messages(task_id);
         if let Some(first) = messages.first_mut() {
-            first.1 = format!("Quest title: {}\n\nQuest description:\n{}", task.title, first.1);
+            first.1 = format!("Quest title: {}\n\nQuest description:\n{}{}", task.title, first.1, crate::attachments::names_note(&db.attachments(task_id)));
         }
         let model = match db.setting("chatgpt_model").filter(|m| !m.is_empty()) {
             Some(m) => Ok(m),
@@ -387,6 +394,12 @@ pub fn run_start(app: AppHandle, state: State<'_, AppState>, task_id: i64, polic
     if state.runner.is_running() {
         return Err(e(ErrorKind::Other, "Another Claude Code run is in progress. Wait for it to finish first."));
     }
+    // Attachments: read back from managed storage; images and PDFs become real content blocks, text is inlined as data.
+    let prepared = crate::attachments::prepare(&crate::attachments::root(&state.data_dir), &state.db.attachments(task_id));
+    let prompt = if prepared.manifest.is_empty() { draft.body.clone() } else { format!("{}\n\n{}", draft.body, prepared.manifest) };
+    if !prepared.missing.is_empty() {
+        return Err(e(ErrorKind::NotFound, format!("These attachments could not be read from storage: {}. Nothing was started.", prepared.missing.join(", "))));
+    }
     let exec_id = state.db.start_execution(task_id, draft.id, policy_name, if autopilot { "autopilot" } else { "ask" }, if model.is_empty() { "default" } else { &model }).map_err(|m| e(ErrorKind::Other, m))?;
     state.db.set_status(task_id, "running").map_err(|m| e(ErrorKind::Other, m))?;
     let _ = state.db.set_setting("policy", policy_name);
@@ -402,7 +415,8 @@ pub fn run_start(app: AppHandle, state: State<'_, AppState>, task_id: i64, polic
         exe,
         project_dir: PathBuf::from(&project.path),
         kind: RunKind::Quest { task_id, exec_id },
-        prompt: draft.body,
+        prompt,
+        attachments: prepared.blocks,
         policy,
         autopilot,
         model,
@@ -529,6 +543,7 @@ pub fn research_start(app: AppHandle, state: State<'_, AppState>, project_id: i6
         project_dir: PathBuf::from(&project.path),
         kind: RunKind::Research { project_id },
         prompt: RESEARCH_PROMPT.to_string(),
+        attachments: vec![],
         policy: Policy::Research,
         autopilot: false,
         model,
@@ -879,6 +894,76 @@ pub fn service_focus(state: State<'_, AppState>, service_id: i64) -> R<bool> {
         return Ok(false);
     }
     Ok(crate::services::focus(pid))
+}
+
+// ---------------------------------------------------------------- quest attachments
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentView {
+    id: i64,
+    name: String,
+    kind: String,
+    mime: String,
+    size: i64,
+}
+
+fn attachment_view(a: &crate::attachments::AttachmentRow) -> AttachmentView {
+    AttachmentView { id: a.id, name: a.name.clone(), kind: a.kind.clone(), mime: a.mime.clone(), size: a.size }
+}
+
+/// Adds one file to a quest. The frontend sends the bytes (base64); Rust validates them and stores its own copy.
+#[tauri::command]
+pub fn attachment_add(state: State<'_, AppState>, task_id: i64, name: String, data: String) -> R<AttachmentView> {
+    use base64::Engine;
+    let task = state.db.task(task_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown quest"))?;
+    if task.status == "running" {
+        return Err(e(ErrorKind::Other, "Wait for the quest to finish before changing its attachments."));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| e(ErrorKind::Other, "The file could not be read."))?;
+    let checked = crate::attachments::validate(&name, &bytes).map_err(|m| e(ErrorKind::Other, m))?;
+    crate::attachments::check_budget(&state.db.attachments(task_id), bytes.len()).map_err(|m| e(ErrorKind::Other, m))?;
+    let row = state.db.add_attachment(task_id, task.project_id, &checked.name, checked.kind.as_str(), checked.mime, bytes.len() as i64, checked.ext).map_err(|m| e(ErrorKind::Other, m))?;
+    let root = crate::attachments::root(&state.data_dir);
+    if let Err(m) = crate::attachments::store(&root, &row.stored, &bytes) {
+        state.db.delete_attachment(row.id);
+        return Err(e(ErrorKind::Other, m));
+    }
+    Ok(attachment_view(&row))
+}
+
+#[tauri::command]
+pub fn attachment_list(state: State<'_, AppState>, task_id: i64) -> Vec<AttachmentView> {
+    state.db.attachments(task_id).iter().map(attachment_view).collect()
+}
+
+/// An attachment is only reachable through the quest (and repository) that owns it.
+fn owned_attachment(state: &AppState, task_id: i64, id: i64) -> R<crate::attachments::AttachmentRow> {
+    state.db.attachment(id).filter(|a| a.task_id == task_id).ok_or_else(|| e(ErrorKind::NotFound, "unknown attachment"))
+}
+
+#[tauri::command]
+pub fn attachment_remove(state: State<'_, AppState>, task_id: i64, id: i64) -> R<()> {
+    let a = owned_attachment(&state, task_id, id)?;
+    if state.db.task(task_id).map(|t| t.status == "running").unwrap_or(false) {
+        return Err(e(ErrorKind::Other, "Wait for the quest to finish before changing its attachments."));
+    }
+    crate::attachments::remove_file(&crate::attachments::root(&state.data_dir), &a.stored);
+    state.db.delete_attachment(id);
+    Ok(())
+}
+
+/// A data URL for an image attachment (thumbnail in the quest view). Other kinds have no preview.
+#[tauri::command]
+pub fn attachment_preview(state: State<'_, AppState>, task_id: i64, id: i64) -> R<String> {
+    use base64::Engine;
+    let a = owned_attachment(&state, task_id, id)?;
+    if a.kind != "image" {
+        return Err(e(ErrorKind::Other, "Only images have a preview."));
+    }
+    let path = crate::attachments::resolve(&crate::attachments::root(&state.data_dir), &a.stored).map_err(|m| e(ErrorKind::NotFound, m))?;
+    let bytes = std::fs::read(path).map_err(|x| e(ErrorKind::NotFound, x.to_string()))?;
+    Ok(format!("data:{};base64,{}", a.mime, base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
 #[tauri::command]

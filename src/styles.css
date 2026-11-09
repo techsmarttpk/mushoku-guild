@@ -1717,3 +1717,243 @@ details > summary {
   background: var(--ink);
   padding: 4px 6px;
 }
+
+/* ---- Library search */
+.lib-search {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.lib-search-row {
+  display: flex;
+  gap: 6px;
+}
+.lib-search-row input {
+  flex: 1;
+}
+.lib-count {
+  min-height: 18px;
+}
+.lib-empty {
+  border: 3px dashed var(--wood-l);
+  background: var(--wood-d);
+  padding: 8px 10px;
+  color: var(--cream-d);
+}
+
+/* ---- Universal Chat: a chat-window look (rounded-corner pixel bubbles with provider avatars), distinct from Guild Chat */
+.uc-wrap .uc-rail .conv-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.uc-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  font-family: "Press Start 2P", monospace;
+  font-size: 10px;
+  border: 2px solid var(--ink);
+  box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.3), inset 2px 2px 0 rgba(255, 255, 255, 0.25);
+}
+.uc-badge.uc-chatgpt {
+  background: #3cc0a0;
+  color: #04261e;
+}
+.uc-badge.uc-claude {
+  background: #e08a52;
+  color: #2c1204;
+}
+.uc-providers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.uc-provider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: inherit;
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--cream-d);
+  background: var(--wood-d);
+  border: 3px solid var(--wood-l);
+  cursor: pointer;
+}
+.uc-provider small {
+  display: block;
+  color: var(--cream-d);
+  font-size: 16px;
+}
+.uc-provider.on.uc-chatgpt {
+  border-color: #3cc0a0;
+  background: #17403a;
+  color: var(--cream);
+}
+.uc-provider.on.uc-claude {
+  border-color: #e08a52;
+  background: #4a2a18;
+  color: var(--cream);
+}
+.uc-provider:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.uc-tag {
+  padding: 0 8px;
+  border: 2px solid var(--edge);
+  font-size: 17px;
+  white-space: nowrap;
+}
+.uc-tag.uc-chatgpt {
+  color: #8ee8d0;
+  border-color: #3cc0a0;
+}
+.uc-tag.uc-claude {
+  color: #f6b888;
+  border-color: #e08a52;
+}
+.uc-note {
+  font-size: 17px;
+  color: var(--cream-d);
+  border-left: 4px solid #e08a52;
+  padding: 2px 8px;
+  background: rgba(224, 138, 82, 0.08);
+}
+.uc-log {
+  gap: 10px;
+}
+.uc-msg {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: 96%;
+}
+.uc-me {
+  align-self: flex-end;
+}
+.uc-me .uc-bubble {
+  background: #2c5a58;
+  border-color: var(--teal);
+}
+.uc-them .uc-bubble {
+  background: var(--wood-d);
+  border-color: var(--wood-l);
+}
+.uc-them.uc-chatgpt .uc-bubble {
+  border-color: #2a7f6c;
+}
+.uc-them.uc-claude .uc-bubble {
+  border-color: #a85f34;
+}
+.uc-bubble {
+  border: 3px solid var(--wood-l);
+  padding: 4px 10px 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.uc-meta {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+  font-size: 16px;
+  color: var(--gold);
+}
+.uc-me .uc-meta {
+  color: var(--cream);
+}
+.uc-copy {
+  margin-left: auto;
+  font-size: 16px;
+  opacity: 0.7;
+}
+.uc-copy:hover {
+  opacity: 1;
+}
+.uc-older {
+  align-self: center;
+}
+.uc-input textarea {
+  min-height: 64px;
+}
+
+/* ---- Quest attachments */
+.attach {
+  border: 3px dashed var(--wood-l);
+  padding: 8px 10px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.attach legend {
+  padding: 0 6px;
+}
+.dropzone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: var(--wood-d);
+  border: 2px solid transparent;
+}
+.dropzone.over {
+  border-color: var(--teal);
+  background: #17403a;
+}
+.dropzone small {
+  flex-basis: 100%;
+}
+.attach-problems {
+  margin: 0;
+  padding: 4px 8px 4px 22px;
+  color: var(--red);
+  border: 2px solid var(--red);
+  background: rgba(224, 88, 77, 0.08);
+}
+.attach-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.attach-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  background: var(--wood-d);
+  border: 2px solid var(--wood-l);
+}
+.attach-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  image-rendering: pixelated;
+  border: 2px solid var(--ink);
+  background: #000;
+}
+.attach-icon {
+  width: 40px;
+  text-align: center;
+  font-size: 24px;
+}
+.attach-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attach-strip .attach-thumb {
+  width: 64px;
+  height: 64px;
+}

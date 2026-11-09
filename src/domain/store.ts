@@ -310,6 +310,11 @@ function reduceEvent(s: UiState, e: AppEvent): UiState {
             },
           }
         : s;
+    case "u_chat_delta":
+    case "u_chat_done":
+    case "u_chat_failed":
+    case "u_chat_title":
+      return s; // Universal Chat has its own state (domain/uchat.ts) and never touches repository state
     case "claude_rate":
       return { ...s, rate: { fiveHour: e.fiveHour, sevenDay: e.sevenDay, status: e.status } };
   }

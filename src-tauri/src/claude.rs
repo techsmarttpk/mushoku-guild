@@ -617,6 +617,8 @@ pub struct StartRequest {
     pub project_dir: PathBuf,
     pub kind: RunKind,
     pub prompt: String,
+    /// Extra content blocks (images, PDFs) sent with the prompt in the same user message.
+    pub attachments: Vec<Value>,
     pub policy: Policy,
     pub autopilot: bool,
     pub model: String,
@@ -687,7 +689,7 @@ impl Runner {
         let job = Arc::new(job.filter(|_| job_ok == Some(true)));
 
         let mut stdin = child.stdin.take().ok_or("no stdin")?;
-        let msg = json!({"type": "user", "message": {"role": "user", "content": req.prompt}});
+        let msg = json!({"type": "user", "message": {"role": "user", "content": crate::attachments::message_content(&req.prompt, req.attachments.clone())}});
         if let Err(e) = stdin.write_all(format!("{msg}\n").as_bytes()) {
             kill_tree(pid);
             let _ = std::fs::remove_file(&cfg_path);

@@ -28,3 +28,9 @@ Status words: **Working** = implemented and exercised in the running app; **Expe
 | OS file watcher | — (polling every 3 s) | Not implemented |
 | Auto-update, code signing | — | Not implemented |
 | Other agents (beyond ChatGPT/Claude Code) | — (the adapter boundary exists; no second adapter) | Not implemented |
+
+## Cycle 5 additions
+- **Café Atmosphere** (Guild tab): Morning / Noon / Evening / Night, Automatic (local time) or Manual.
+- **Library search** (`/` or Ctrl+F): title, file name and path, case-insensitive, live count.
+- **Quest attachments**: PNG, JPG, WEBP, GIF, TXT, LOG, PDF, Markdown; picker or drag and drop; Claude receives them with the approved prompt.
+- **Universal Chat** tab: repository-independent conversations with ChatGPT or Claude (Claude in no-tools conversation mode). The former Chat tab is now called Guild Chat.
