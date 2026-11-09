@@ -3,8 +3,11 @@ import { CafeScene, SCENE_H, SCENE_W } from "./cafe/CafeScene.ts";
 import { LibraryScene } from "./cafe/LibraryScene.ts";
 import { msUntilNextDaypart, parseSetting, resolveDaypart, type AtmosphereMode, type Daypart } from "./domain/atmosphere.ts";
 import { projectScene } from "./domain/scene.ts";
+import { createDirector, toSteps } from "./domain/idle.ts";
+import { rebuildDelay, shouldAutoRebuild, type RenderHealth } from "./domain/renderHealth.ts";
 import { filterDocs, matchSummary } from "./domain/library.ts";
-import { neighbour } from "./domain/shelf.ts";
+import { CLOSED, reduceLibSearch } from "./domain/libSearch.ts";
+import { fitView, neighbour, type View } from "./domain/shelf.ts";
 import { initialState, reduce } from "./domain/store.ts";
 import { type DocContent, type LibraryMeta, type Model, type Policy, type Project, type ProviderError, type BrowserStatus, type UProvider } from "./domain/types.ts";
 import { createWelcomeGate, pickWelcome } from "./domain/welcome.ts";
@@ -12,6 +15,8 @@ import { api, onAppEvent, onWindowMinimized, toProviderError } from "./ipc.ts";
 import { ChatPanel } from "./ui/ChatPanel.tsx";
 import { AttachmentStrip } from "./ui/Attachments.tsx";
 import { UniversalChat } from "./ui/UniversalChat.tsx";
+import { Todos, type TodoDraft } from "./ui/Todos.tsx";
+import type { Todo } from "./domain/todos.ts";
 import { initialU, parseProvider, reduceU } from "./domain/uchat.ts";
 import { readBase64 } from "./domain/attachments.ts";
 import { AtmosphereCard, BrowserCard, PermissionsCard, RepoTag, ServicesPanel } from "./ui/Extras.tsx";
@@ -25,14 +30,18 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 /** One greeting per application launch; React re-renders and effect re-runs cannot repeat it. */
 const welcomeGate = createWelcomeGate();
 
-type Tab = "quest" | "chat" | "uchat" | "library" | "repo" | "guild";
-const TAB_LABEL: Record<Tab, string> = { quest: "Quests", chat: "Guild Chat", uchat: "Universal Chat", library: "Library", repo: "Repo", guild: "Guild" };
+type Tab = "quest" | "todo" | "chat" | "uchat" | "library" | "repo" | "guild";
+const TAB_LABEL: Record<Tab, string> = { quest: "Quests", todo: "To-Do", chat: "Guild Chat", uchat: "Universal Chat", library: "Library", repo: "Repo", guild: "Guild" };
 
 export function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
   const [u, uDispatch] = useReducer(reduceU, initialU);
   const [tab, setTab] = useState<Tab>("guild");
   const [newQuest, setNewQuest] = useState(false);
+  // café renderer recovery: a rebuild recreates only the Pixi scene, never the application
+  const [sceneEpoch, setSceneEpoch] = useState(0);
+  const [sceneDead, setSceneDead] = useState<RenderHealth | null>(null);
+  const rebuilds = useRef<number[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [authError, setAuthError] = useState<ProviderError | null>(null);
@@ -49,8 +58,16 @@ export function App() {
   const [libHover, setLibHover] = useState(-1);
   const [libLoading, setLibLoading] = useState(false);
   const [libError, setLibError] = useState<string | null>(null);
-  const [libQuery, setLibQuery] = useState("");
+  const [libSearch, libSearchDispatch] = useReducer(reduceLibSearch, CLOSED);
+  const libQuery = libSearch.query;
+  const libSearchOpen = libSearch.open;
+  const setLibQuery = (query: string): void => libSearchDispatch(query === "" ? { type: "clear" } : { type: "type", query });
   const searchRef = useRef<HTMLInputElement>(null);
+  const libAreaRef = useRef<HTMLDivElement>(null);
+  const [libFit, setLibFit] = useState<{ scale: number; view: View }>(() => fitView(576, 352));
+  const libFitRef = useRef(libFit);
+  libFitRef.current = libFit;
+  const [libLost, setLibLost] = useState(0);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const libHostRef = useRef<HTMLDivElement>(null);
@@ -224,9 +241,23 @@ export function App() {
     sceneRef.current = scene;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    const sync = (): void => scene.setPaused(document.hidden || minimized.current || tabRef.current === "repo");
+    setSceneDead(null);
+    scene.onStatus((h) => {
+      if (cancelled || h.state !== "failed") return;
+      const now = Date.now();
+      if (shouldAutoRebuild(rebuilds.current, now)) {
+        const wait = rebuildDelay(rebuilds.current, now);
+        rebuilds.current.push(now);
+        setTimeout(() => !cancelled && setSceneEpoch((e) => e + 1), wait);
+      } else setSceneDead(h);
+    });
+    const sync = (): void => {
+      scene.setPaused(document.hidden || minimized.current || tabRef.current === "repo");
+      if (!document.hidden && !minimized.current) scene.refresh(); // a hidden or minimised canvas may have been discarded
+    };
     syncRef.current = sync;
     document.addEventListener("visibilitychange", sync);
+    window.addEventListener("focus", sync);
     void (async () => {
       await scene.init(host);
       if (cancelled) return;
@@ -234,7 +265,7 @@ export function App() {
       if (welcomeGate()) scene.welcome(pickWelcome(Math.random));
       unlisten = await onWindowMinimized((m) => {
         minimized.current = m;
-        sync();
+        sync(); // restoring from minimise redraws
       });
       if (cancelled) unlisten();
     })();
@@ -242,13 +273,54 @@ export function App() {
       cancelled = true;
       unlisten?.();
       document.removeEventListener("visibilitychange", sync);
+      window.removeEventListener("focus", sync);
       scene.destroy();
       sceneRef.current = null;
     };
-  }, []);
+  }, [sceneEpoch]);
   useEffect(() => {
-    syncRef.current();
+    syncRef.current(); // also redraws: the café canvas is hidden while the Library tab is open
   }, [tab]);
+  useEffect(() => {
+    sceneRef.current?.refresh();
+  }, [scale]);
+
+  // ---------------------------------------------------------------- idle conversations (local, offline: no AI call is ever made)
+  const director = useMemo(() => createDirector(Math.random), []);
+  const outcome = useRef<{ kind: "success" | "failure"; at: number } | null>(null);
+  const idleFacts = useRef({ pending: 0, blocked: false });
+  idleFacts.current = {
+    pending: state.quests.filter((q) => ["draft", "prompt_ready", "approved"].includes(q.status)).length,
+    // an open permission request or a focused text field means the owner is busy: stay quiet
+    blocked: state.permissions.length > 0,
+  };
+  const lastStatusSeen = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = lastStatusSeen.current;
+    lastStatusSeen.current = status;
+    if (prev === "running" && (status === "completed" || status === "failed")) outcome.current = { kind: status === "completed" ? "success" : "failure", at: Date.now() };
+  }, [status]);
+  const [idleKick, setIdleKick] = useState(0);
+  useEffect(() => {
+    // a finished quest is commented on soon after the café settles; otherwise the normal relaxed rhythm applies
+    const wait = outcome.current && Date.now() - outcome.current.at < 10 * 60_000 ? 9000 : director.delay();
+    const t = setTimeout(() => {
+      const scene = sceneRef.current;
+      const el = document.activeElement;
+      const typing = el instanceof HTMLElement && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
+      const fact = idleFacts.current;
+      const o = outcome.current && Date.now() - outcome.current.at < 10 * 60_000 ? outcome.current.kind : null;
+      if (scene && !document.hidden && !typing && !fact.blocked && scene.canChat()) {
+        const e = director.next({ daypart: scene.currentTheme(), outcome: o, pending: fact.pending }, Date.now());
+        if (e) {
+          scene.welcome(toSteps(e));
+          if (o) outcome.current = null; // reacted once
+        }
+      }
+      setIdleKick((n) => n + 1);
+    }, wait);
+    return () => clearTimeout(t);
+  }, [idleKick, director]);
 
   // ---------------------------------------------------------------- café atmosphere (local clock, never UTC)
   const atmoSetting = useMemo(() => parseSetting(state.settings), [state.settings]);
@@ -280,7 +352,7 @@ export function App() {
   const settingsReady = Object.keys(state.settings).length > 0 || state.projects.length > 0 || state.chatgpt.connected;
   useEffect(() => {
     if (settingsReady || atmoSetting.mode === "auto") sceneRef.current?.setTheme(daypart);
-  }, [daypart, settingsReady, atmoSetting.mode]);
+  }, [daypart, settingsReady, atmoSetting.mode, sceneEpoch]);
 
   const sceneState = useMemo(
     () => projectScene({ status, streaming: state.streaming, permissionPending: state.permissions.length > 0, currentTool: state.currentTool, researching: state.research?.status === "researching" || state.chatResearching !== null, chatting: state.chatStreaming || u.streaming }),
@@ -288,7 +360,7 @@ export function App() {
   );
   useEffect(() => {
     sceneRef.current?.setState(sceneState);
-  }, [sceneState]);
+  }, [sceneState, sceneEpoch]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -334,7 +406,7 @@ export function App() {
   docsRef.current = visibleDocs;
   // a repository is a workspace: its search text, open book and shelves must not leak into the next one
   useEffect(() => {
-    setLibQuery("");
+    libSearchDispatch({ type: "close" });
     setLibDoc(null);
     setLibDocs([]);
     setLibHover(-1);
@@ -346,13 +418,36 @@ export function App() {
       const typing = e.target instanceof HTMLElement && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA");
       if (((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") || (e.key === "/" && !typing)) {
         e.preventDefault();
-        searchRef.current?.focus();
-        searchRef.current?.select();
+        libSearchDispatch({ type: "open" });
+        setTimeout(() => {
+          searchRef.current?.focus();
+          searchRef.current?.select();
+        }, 0);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [tab]);
+  const closeLibSearch = useCallback(() => libSearchDispatch({ type: "close" }), []);
+  useEffect(() => {
+    if (tab !== "library") closeLibSearch(); // leaving the Library closes the search interface
+  }, [tab, closeLibSearch]);
+  // The shelf follows the size of the space it is given; only the layout is recomputed, the scene is kept.
+  useEffect(() => {
+    const el = libAreaRef.current;
+    if (tab !== "library" || !el) return;
+    const measure = (): void => {
+      const fit = fitView(el.clientWidth, el.clientHeight);
+      setLibFit((old) => (old.scale === fit.scale && old.view.w === fit.view.w && old.view.h === fit.view.h ? old : fit));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tab]);
+  useEffect(() => {
+    libRef.current?.resize(libFit.view);
+  }, [libFit]);
   useEffect(() => {
     const host = libHostRef.current;
     if (tab !== "library" || !host) return;
@@ -365,7 +460,8 @@ export function App() {
       if (d) void openDoc(d.path);
     });
     void (async () => {
-      await scene.init(host);
+      scene.onLost(() => !cancelled && setLibLost((n) => n + 1));
+      await scene.init(host, libFitRef.current.view);
       if (!cancelled) scene.setDocs(docsRef.current, null);
     })();
     return () => {
@@ -373,7 +469,7 @@ export function App() {
       libRef.current = null;
       scene.destroy();
     };
-  }, [tab, openDoc]);
+  }, [tab, openDoc, libLost]);
   useEffect(() => {
     libRef.current?.setDocs(visibleDocs, libDoc?.path ?? null);
     setLibHover(-1);
@@ -384,7 +480,7 @@ export function App() {
     if (dir) {
       e.preventDefault();
       const cur = libDoc ? visibleDocs.findIndex((d) => d.path === libDoc.path) : libHover;
-      const next = neighbour(cur, dir, visibleDocs.length);
+      const next = neighbour(cur, dir, visibleDocs.length, libRef.current?.columns);
       if (next >= 0) {
         libRef.current?.setSelectedIndex(next);
         setLibHover(next);
@@ -583,6 +679,30 @@ export function App() {
     return () => clearInterval(t);
   }, [pid, state.research?.status]);
 
+  // ---------------------------------------------------------------- To-Do (global list; an optional repository tag only labels and filters)
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [todoError, setTodoError] = useState<string | null>(null);
+  useEffect(() => {
+    if (tab === "todo") void api.todoList().then(setTodos, (e: unknown) => setTodoError(toProviderError(e).message));
+  }, [tab]);
+  const saveTodo = async (d: TodoDraft): Promise<boolean> => {
+    setTodoError(null);
+    try {
+      const saved = await api.todoSave(d.id, d.title, d.description, d.priority, d.due || null, d.projectId);
+      setTodos((list) => (list.some((t) => t.id === saved.id) ? list.map((t) => (t.id === saved.id ? saved : t)) : [...list, saved]));
+      return true;
+    } catch (e) {
+      setTodoError(toProviderError(e).message);
+      return false;
+    }
+  };
+  const toggleTodo = (id: number, done: boolean): void => {
+    void api.todoSetDone(id, done).then((t) => setTodos((list) => list.map((x) => (x.id === id ? t : x))), (e: unknown) => setTodoError(toProviderError(e).message));
+  };
+  const deleteTodo = (id: number): void => {
+    void api.todoDelete(id).then(() => setTodos((list) => list.filter((x) => x.id !== id)), (e: unknown) => setTodoError(toProviderError(e).message));
+  };
+
   // ---------------------------------------------------------------- Universal Chat (global: no repository, own state and storage)
   const reloadU = useCallback(async (query: string) => {
     try {
@@ -697,49 +817,82 @@ export function App() {
 
       <main className={`cols ${tab === "repo" ? "repo-mode" : ""}`}>
         <section className="left">
-          {tab === "library" && project && (
-            <div className="lib-search" role="search">
-              <div className="lib-search-row">
-                <input
-                  ref={searchRef}
-                  type="search"
-                  value={libQuery}
-                  placeholder="Search books by title, file name or path…  ( / or Ctrl+F )"
-                  aria-label="Search the library"
-                  onChange={(e) => setLibQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      e.stopPropagation();
-                      if (libQuery) setLibQuery("");
-                      else searchRef.current?.blur();
-                    }
-                  }}
-                />
-                {libQuery && (
-                  <button className="btn btn-quiet" onClick={() => { setLibQuery(""); searchRef.current?.focus(); }} aria-label="Clear search">
-                    ✕ Clear
+          <div className="cafe-slot" ref={wrapRef} style={{ display: tab === "library" ? "none" : undefined }}>
+            <div className="cafe" style={{ "--w": `${Math.round(SCENE_W * scale)}px`, "--h": `${Math.round(SCENE_H * scale)}px` } as React.CSSProperties}>
+              <div ref={hostRef} className="cafe-canvas" style={{ display: tab === "library" ? "none" : "block" }} />
+              {sceneDead && tab !== "library" && (
+                <div className="cafe-fallback" role="alert">
+                  <strong>The café lost its picture.</strong>
+                  <span>A graphics problem stopped the scene from drawing. Nothing else is affected.</span>
+                  <button className="btn btn-primary" onClick={() => { rebuilds.current = []; setSceneEpoch((e) => e + 1); }}>
+                    Retry rendering
                   </button>
-                )}
-              </div>
-              <div className="lib-count muted small" aria-live="polite">{matchSummary(visibleDocs.length, libDocs.length, libQuery)}</div>
+                  <small className="muted">{sceneDead.reason}</small>
+                </div>
+              )}
+            </div>
+          </div>
+          {tab === "library" && (
+            <div className="lib-area" ref={libAreaRef}>
+              <div
+                ref={libHostRef}
+                className="library-host"
+                style={{ "--w": `${Math.round(libFit.view.w * libFit.scale)}px`, "--h": `${Math.round(libFit.view.h * libFit.scale)}px` } as React.CSSProperties}
+                tabIndex={0}
+                onKeyDown={onShelfKey}
+                aria-label="Bookshelf. Arrow keys move between books, Enter opens one."
+              />
+              {project && !libSearchOpen && (
+                <button className={`lib-search-btn ${libQuery ? "active" : ""}`} onClick={() => { libSearchDispatch({ type: "open" }); setTimeout(() => searchRef.current?.focus(), 0); }} title="Search the library ( / or Ctrl+F )" aria-label="Search the library">
+                  <span aria-hidden>🔍</span>
+                </button>
+              )}
+              {project && libSearchOpen && (
+                <div className="lib-searchbox" role="search">
+                  <input
+                    ref={searchRef}
+                    type="search"
+                    value={libQuery}
+                    placeholder="Search books…"
+                    aria-label="Search the library"
+                    onChange={(e) => setLibQuery(e.target.value)}
+                    onBlur={() => libSearchDispatch({ type: "blur" })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.stopPropagation();
+                        closeLibSearch();
+                        libHostRef.current?.focus();
+                      }
+                    }}
+                  />
+                  <span className="lib-count" aria-live="polite">{matchSummary(visibleDocs.length, libDocs.length, libQuery)}</span>
+                  {libQuery && (
+                    <button className="btn btn-quiet" onMouseDown={(e) => e.preventDefault()} onClick={() => { setLibQuery(""); searchRef.current?.focus(); }} aria-label="Clear search">
+                      Clear
+                    </button>
+                  )}
+                  <button className="btn btn-quiet" onMouseDown={(e) => e.preventDefault()} onClick={closeLibSearch} aria-label="Close search">
+                    ✕
+                  </button>
+                </div>
+              )}
               {libQuery.trim() && visibleDocs.length === 0 && libDocs.length > 0 && (
-                <div className="lib-empty">
+                <div className="lib-empty" role="status">
                   <span aria-hidden>📚</span> No book on these shelves answers to “{libQuery.trim()}”. The librarian checked every shelf twice. Try a shorter word, or clear the search.
                 </div>
               )}
             </div>
           )}
-          <div className="cafe-slot" ref={wrapRef}>
-            <div className="cafe" style={{ "--w": `${Math.round(SCENE_W * scale)}px`, "--h": `${Math.round(SCENE_H * scale)}px` } as React.CSSProperties}>
-              <div ref={hostRef} className="cafe-canvas" style={{ display: tab === "library" ? "none" : "block" }} />
-              {tab === "library" && <div ref={libHostRef} className="library-host" tabIndex={0} onKeyDown={onShelfKey} aria-label="Bookshelf. Arrow keys move between books, Enter opens one." />}
-            </div>
-          </div>
-          <div className="activity panel">
+          <div className={`activity panel ${tab === "library" ? "compact" : ""}`}>
             {tab === "chat" ? (
               <>
                 <h2 className="panel-title">Research activity {(state.research?.status === "researching" || state.chatResearching !== null) && <small>· Claude is reading the repository</small>}</h2>
                 <ActivityFeed items={state.researchActivity} empty="When ChatGPT asks Claude to investigate (or you press Ask Claude for Context), every file Claude reads appears here. Research is read-only." />
+              </>
+            ) : tab === "todo" ? (
+              <>
+                <h2 className="panel-title">To-Do <small>· your own list, not quests</small></h2>
+                <div className="muted pad">Quick notes for yourself. To-dos are global unless you tag a repository, and they never start Claude or ChatGPT.</div>
               </>
             ) : tab === "uchat" ? (
               <>
@@ -932,6 +1085,8 @@ export function App() {
               onCancelResearch={() => void api.researchCancel()}
             />
           )}
+
+          {tab === "todo" && <Todos todos={todos} projects={state.projects} activeProjectId={pid} busy={false} error={todoError} onSave={saveTodo} onToggle={toggleTodo} onDelete={deleteTodo} />}
 
           {tab === "uchat" && (
             <UniversalChat

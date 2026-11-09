@@ -156,3 +156,10 @@ Template:
 - **Quest attachments:** files are validated by Rust (extension allow-list, magic bytes, size/count limits), copied to `<data>/attachments/<project>/<quest>/<id>.<ext>` and recorded in `task_attachments`. Images and PDFs reach Claude as `image`/`document` content blocks of the stream-json user message (verified against the real CLI, test `real_claude_sees_the_attached_image_pdf_and_text`); text is inlined as capped DATA. A manifest is appended to the approved prompt at run time. They grant no permissions. The main window sets `dragDropEnabled: false` so HTML5 drag and drop reaches the page.
 - **Universal Chat:** global tables `uchat_conversations` / `uchat_messages` with no project column; one provider per conversation. ChatGPT mode reuses the existing OAuth and model setting unchanged. Claude mode runs the installed CLI with `--tools ""`, `--setting-sources ""`, no MCP, in an empty scratch folder, one turn, history replayed as a transcript (no session files). A separate opt-in read-only research capability was NOT built; Claude chat is conversation only.
 - **Library search:** client-side filter over the already-listed document metadata; no disk scan per keystroke.
+
+### ADR-0014 (accepted 2026-11-09, owner's Cycle 6 instruction): renderer recovery, idle dialogue, To-Do, responsive Library
+- **Renderer recovery:** a tiny pure health state machine (`domain/renderHealth.ts`) drives recovery. Lost WebGL contexts wait for the browser's restore; failures rebuild only the Pixi scene (at most twice a minute), then the UI shows a fallback with Retry. The whole application is never reloaded.
+- **Idle dialogue:** local data and a deterministic director (`domain/idle.ts`); the module imports nothing from the IPC layer (test-enforced). Zero network or AI use.
+- **To-Do:** own SQLite table `todos` (migration 5), repository tag `ON DELETE SET NULL`; separate from quests.
+- **Library:** logical view size follows the container (`fitView`); only the layout is recomputed on resize.
+- **Provider research:** `docs/MULTI_MODEL_PROVIDER_RESEARCH.md` recommends a Rust generic OpenAI-compatible adapter; no SDK or Node runtime.

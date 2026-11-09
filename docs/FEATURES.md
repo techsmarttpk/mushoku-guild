@@ -34,3 +34,8 @@ Status words: **Working** = implemented and exercised in the running app; **Expe
 - **Library search** (`/` or Ctrl+F): title, file name and path, case-insensitive, live count.
 - **Quest attachments**: PNG, JPG, WEBP, GIF, TXT, LOG, PDF, Markdown; picker or drag and drop; Claude receives them with the approved prompt.
 - **Universal Chat** tab: repository-independent conversations with ChatGPT or Claude (Claude in no-tools conversation mode). The former Chat tab is now called Guild Chat.
+
+## Cycle 6 additions
+- **To-Do** tab: global personal tasks with optional repository tag, priority, due date, filters, sorting, progress.
+- **Idle conversations** between the two characters (offline, no AI).
+- **Library**: search button on the shelf; the shelf resizes with the window.

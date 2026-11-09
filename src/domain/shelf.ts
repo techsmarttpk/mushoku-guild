@@ -10,6 +10,9 @@ export const MARGIN_X = 10;
 export const TOP = 22; // room for the "LIBRARY" sign
 export const ROW_H = 50; // book + board + breathing space
 export const COLS = Math.floor((SHELF_W - MARGIN_X * 2 + BOOK_GAP) / (BOOK_W + BOOK_GAP));
+/** Smallest view the shelf lays out (one column of books). */
+export const MIN_VIEW_W = BOOK_W + MARGIN_X * 2;
+export const MIN_VIEW_H = 96;
 
 export interface BookRect {
   index: number;
@@ -19,24 +22,44 @@ export interface BookRect {
   h: number;
 }
 
-export function layoutBooks(count: number): BookRect[] {
-  const free = SHELF_W - MARGIN_X * 2 - (COLS * BOOK_W + (COLS - 1) * BOOK_GAP);
-  const start = MARGIN_X + Math.floor(free / 2);
+/**
+ * The shelf is laid out for whatever view size it is given (logical pixels, not the original window size): the number of
+ * columns follows the width, rows follow the number of books, and the board rows always fill at least the view height.
+ * Every function defaults to the original 288x176 view so older callers and tests keep working.
+ */
+export interface View {
+  w: number;
+  h: number;
+}
+
+export const DEFAULT_VIEW: View = { w: SHELF_W, h: SHELF_H };
+
+export function clampView(v: View): View {
+  return { w: Math.max(MIN_VIEW_W, Math.floor(v.w)), h: Math.max(MIN_VIEW_H, Math.floor(v.h)) };
+}
+
+export function columnsFor(viewW: number = SHELF_W): number {
+  return Math.max(1, Math.floor((viewW - MARGIN_X * 2 + BOOK_GAP) / (BOOK_W + BOOK_GAP)));
+}
+
+export function layoutBooks(count: number, cols: number = COLS, viewW: number = SHELF_W): BookRect[] {
+  const free = viewW - MARGIN_X * 2 - (cols * BOOK_W + (cols - 1) * BOOK_GAP);
+  const start = MARGIN_X + Math.max(0, Math.floor(free / 2));
   return Array.from({ length: count }, (_, i) => ({
     index: i,
-    x: start + (i % COLS) * (BOOK_W + BOOK_GAP),
-    y: TOP + Math.floor(i / COLS) * ROW_H + (ROW_H - 6 - BOOK_H),
+    x: start + (i % cols) * (BOOK_W + BOOK_GAP),
+    y: TOP + Math.floor(i / cols) * ROW_H + (ROW_H - 6 - BOOK_H),
     w: BOOK_W,
     h: BOOK_H,
   }));
 }
 
-export const rowCount = (count: number): number => Math.max(3, Math.ceil(count / COLS));
-export const contentHeight = (count: number): number => TOP + rowCount(count) * ROW_H + 6;
-export const maxScroll = (count: number): number => Math.max(0, contentHeight(count) - SHELF_H);
-export const clampScroll = (scroll: number, count: number): number => Math.min(maxScroll(count), Math.max(0, Math.round(scroll)));
+export const rowCount = (count: number, cols: number = COLS, viewH: number = SHELF_H): number => Math.max(Math.ceil(count / cols), Math.ceil((viewH - TOP - 6) / ROW_H), 1);
+export const contentHeight = (count: number, cols: number = COLS, viewH: number = SHELF_H): number => TOP + rowCount(count, cols, viewH) * ROW_H + 6;
+export const maxScroll = (count: number, cols: number = COLS, viewH: number = SHELF_H): number => Math.max(0, contentHeight(count, cols, viewH) - viewH);
+export const clampScroll = (scroll: number, count: number, cols: number = COLS, viewH: number = SHELF_H): number => Math.min(maxScroll(count, cols, viewH), Math.max(0, Math.round(scroll)));
 
-/** Which book is under the pointer? x and y are scene coordinates (0..SHELF_W, 0..SHELF_H). */
+/** Which book is under the pointer? x and y are scene coordinates (0..view.w, 0..view.h). */
 export function hitTest(rects: BookRect[], x: number, y: number, scroll: number): number {
   const cy = y + scroll;
   const hit = rects.find((r) => x >= r.x && x < r.x + r.w && cy >= r.y - 2 && cy < r.y + r.h);
@@ -44,18 +67,27 @@ export function hitTest(rects: BookRect[], x: number, y: number, scroll: number)
 }
 
 /** Scroll position that brings a book fully into view (keyboard navigation). */
-export function scrollToShow(rect: BookRect, scroll: number, count: number): number {
-  if (rect.y - 8 < scroll) return clampScroll(rect.y - 8, count);
-  if (rect.y + rect.h + 12 > scroll + SHELF_H) return clampScroll(rect.y + rect.h + 12 - SHELF_H, count);
+export function scrollToShow(rect: BookRect, scroll: number, count: number, cols: number = COLS, viewH: number = SHELF_H): number {
+  if (rect.y - 8 < scroll) return clampScroll(rect.y - 8, count, cols, viewH);
+  if (rect.y + rect.h + 12 > scroll + viewH) return clampScroll(rect.y + rect.h + 12 - viewH, count, cols, viewH);
   return scroll;
 }
 
 /** Keyboard navigation between books: arrows move in the grid; returns the new index (or the same one at an edge). */
-export function neighbour(index: number, key: "left" | "right" | "up" | "down", count: number): number {
+export function neighbour(index: number, key: "left" | "right" | "up" | "down", count: number, cols: number = COLS): number {
   if (count === 0) return -1;
   const i = index < 0 ? 0 : index;
-  const next = key === "left" ? i - 1 : key === "right" ? i + 1 : key === "up" ? i - COLS : i + COLS;
+  const next = key === "left" ? i - 1 : key === "right" ? i + 1 : key === "up" ? i - cols : i + cols;
   return next < 0 || next >= count ? i : next;
+}
+
+/**
+ * CSS scale for the view and the logical view size that exactly fills a container. Larger windows get bigger books
+ * (up to 3x) and, beyond that, more columns; smaller windows get fewer columns, never clipped books.
+ */
+export function fitView(cssW: number, cssH: number): { scale: number; view: View } {
+  const scale = Math.min(3, Math.max(1, Math.floor((cssW / SHELF_W) * 4) / 4));
+  return { scale, view: clampView({ w: cssW / scale, h: cssH / scale }) };
 }
 
 function hash(s: string): number {

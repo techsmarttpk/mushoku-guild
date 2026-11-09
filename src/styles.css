@@ -1718,28 +1718,77 @@ details > summary {
   padding: 4px 6px;
 }
 
-/* ---- Library search */
-.lib-search {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-.lib-search-row {
-  display: flex;
-  gap: 6px;
-}
-.lib-search-row input {
+/* ---- Library: responsive shelf area, search button and compact search field on the shelf itself */
+.lib-area {
+  position: relative;
   flex: 1;
+  min-height: 120px;
+  min-width: 0;
+  overflow: hidden;
+  border: 4px solid var(--edge);
+  background: #000;
+  box-shadow: 0 0 0 4px var(--ink);
+}
+.lib-area .library-host {
+  position: absolute;
+  inset: 0;
+}
+.lib-search-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  background: var(--wood);
+  border: 3px solid var(--edge-l);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+.lib-search-btn:hover,
+.lib-search-btn.active {
+  background: var(--teal);
+}
+.lib-searchbox {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 12px);
+  padding: 4px 6px;
+  background: var(--wood);
+  border: 3px solid var(--edge-l);
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.lib-searchbox input {
+  width: 190px;
+  min-width: 80px;
 }
 .lib-count {
-  min-height: 18px;
+  white-space: nowrap;
+  color: var(--cream-d);
+  font-size: 17px;
 }
 .lib-empty {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2;
   border: 3px dashed var(--wood-l);
   background: var(--wood-d);
   padding: 8px 10px;
   color: var(--cream-d);
+}
+.activity.compact {
+  flex: none;
+  max-height: 96px;
 }
 
 /* ---- Universal Chat: a chat-window look (rounded-corner pixel bubbles with provider avatars), distinct from Guild Chat */
@@ -1956,4 +2005,117 @@ details > summary {
 .attach-strip .attach-thumb {
   width: 64px;
   height: 64px;
+}
+
+/* ---- café renderer fallback */
+.cafe {
+  position: relative;
+}
+.cafe-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  text-align: center;
+  line-height: 1.2;
+  background: #1b110b;
+  color: var(--cream);
+}
+
+/* ---- To-Do */
+.todo-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.todo-progress .bar {
+  flex: 1;
+  height: 12px;
+  border: 2px solid var(--ink);
+  background: var(--wood-d);
+}
+.todo-progress .bar span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+}
+.todo-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 3px solid var(--gold);
+  background: var(--wood-d);
+}
+.todo-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.todo-fields label,
+.todo-sort {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 17px;
+}
+.todo-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.todo-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 6px 8px;
+  border: 3px solid var(--wood-l);
+  border-left-width: 8px;
+  background: var(--wood-d);
+}
+.todo-item.p-high {
+  border-left-color: var(--red);
+}
+.todo-item.p-medium {
+  border-left-color: var(--gold);
+}
+.todo-item.p-low {
+  border-left-color: var(--teal);
+}
+.todo-item.late {
+  background: #3a1d17;
+}
+.todo-item.done {
+  opacity: 0.6;
+}
+.todo-item.done .todo-title {
+  text-decoration: line-through;
+}
+.todo-item input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin-top: 3px;
+  flex: none;
+}
+.todo-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.todo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.todo-desc {
+  white-space: pre-wrap;
 }

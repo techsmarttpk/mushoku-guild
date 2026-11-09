@@ -18,6 +18,7 @@ import { bubbleSize, placeBubble, type Placement, type Rect } from "../domain/bu
 import { CHAR_H, CHAR_W, buildBubble, buildSpeech, buildCharacter, buildTicket, type CharacterSprites, type FrameSet, type Who } from "./sprites.ts";
 import type { Pen } from "./pixel.ts";
 import { AtmosphereLayer } from "./atmosphere.ts";
+import { HEALTHY, RESTORE_WAIT_MS, nextHealth, type HealthEvent, type RenderHealth } from "../domain/renderHealth.ts";
 import type { Daypart } from "../domain/atmosphere.ts";
 
 export const SCENE_W = W;
@@ -57,6 +58,9 @@ export interface SceneDiagnostics {
   gpuVendor: string;
   gpuRenderer: string;
   framesTicked: number;
+  health: string;
+  healthReason: string | null;
+  recentErrors: string[];
   framesRendered: number;
   timerActive: boolean;
   sharedTicker: { started: boolean; listeners: number };
@@ -97,11 +101,70 @@ export class CafeScene {
   private speechTimers: ReturnType<typeof setTimeout>[] = [];
   private monitorTex: Texture[] = [];
   private atmo: AtmosphereLayer | null = null;
+  private health: RenderHealth = HEALTHY;
+  private restoreTimer: ReturnType<typeof setTimeout> | null = null;
+  private statusCb: (h: RenderHealth) => void = () => undefined;
+  private starting = false;
+  private speakingUntil = 0;
+  private errorLog: string[] = [];
+  private canvasEl: HTMLCanvasElement | null = null;
   private theme: Daypart = "morning";
   private lastStepAt = 0;
   private themed = false;
 
+  /** The UI listens here to show a fallback (with Retry) when the renderer cannot recover by itself. */
+  onStatus(cb: (h: RenderHealth) => void): void {
+    this.statusCb = cb;
+  }
+
+  private note(e: HealthEvent, detail?: string): void {
+    if (detail) {
+      this.errorLog.push(`${new Date().toISOString()} ${detail}`);
+      if (this.errorLog.length > 20) this.errorLog.shift();
+      console.error("[café renderer]", detail);
+    }
+    const next = nextHealth(this.health, e);
+    if (next === this.health) return;
+    this.health = next;
+    this.statusCb(next);
+  }
+
+  private readonly onContextLost = (ev: Event): void => {
+    ev.preventDefault(); // lets the browser restore the context
+    this.note({ type: "context_lost" }, "WebGL context lost");
+    if (this.restoreTimer === null) {
+      this.restoreTimer = setTimeout(() => {
+        this.restoreTimer = null;
+        this.note({ type: "restore_timeout" }, "WebGL context was not restored in time");
+      }, RESTORE_WAIT_MS);
+    }
+  };
+
+  private readonly onContextRestored = (): void => {
+    if (this.restoreTimer !== null) clearTimeout(this.restoreTimer);
+    this.restoreTimer = null;
+    this.note({ type: "context_restored" }, "WebGL context restored");
+    this.refresh();
+  };
+
+  /** Forces the next frame to be drawn even if nothing changed: the browser may have discarded the canvas contents (minimise, GPU reset, hidden tab). */
+  refresh(): void {
+    this.lastRenderedKey = "";
+    if (!this.paused) this.paint();
+  }
+
   async init(host: HTMLElement): Promise<void> {
+    if (this.starting || this.initialised || this.destroyed) return; // never two Pixi applications for one scene
+    this.starting = true;
+    try {
+      await this.start(host);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.note({ type: "init_error", message: msg }, `init failed: ${msg}`);
+    }
+  }
+
+  private async start(host: HTMLElement): Promise<void> {
     await this.app.init({
       width: W,
       height: H,
@@ -129,6 +192,9 @@ export class CafeScene {
     canvas.setAttribute("aria-label", "Pixel-art café showing what the Reasoner and Executor are doing");
     canvas.setAttribute("role", "img");
     host.appendChild(canvas);
+    this.canvasEl = canvas;
+    canvas.addEventListener("webglcontextlost", this.onContextLost);
+    canvas.addEventListener("webglcontextrestored", this.onContextRestored);
 
     this.build();
     this.initialised = true;
@@ -262,6 +328,7 @@ export class CafeScene {
   welcome(steps: WelcomeStep[]): void {
     this.stopSpeech();
     let at = 600;
+    this.speakingUntil = Date.now() + 600 + steps.reduce((n, s) => n + s.ms + 450, 0) + 400;
     for (const st of steps) {
       const show = at;
       this.speechTimers.push(
@@ -297,6 +364,13 @@ export class CafeScene {
     }
   }
 
+  /** True when an idle chat may start: nothing on the board, both characters resting in the lounge and nobody already talking. */
+  canChat(): boolean {
+    if (!this.actors || this.destroyed || !this.initialised || this.paused || this.health.state !== "ok") return false;
+    if (this.board !== "empty" || Date.now() < this.speakingUntil) return false;
+    return Object.values(this.actors).every((a) => a.route.length === 0 && a.spot === "lounge" && a.bubbleKind === "none" && !WORKING_POSES.has(a.pose));
+  }
+
   private redraw(): void {
     if (!this.destroyed && !this.paused && this.initialised) this.paint();
   }
@@ -317,6 +391,7 @@ export class CafeScene {
       this.clearTimer();
       this.lastStepAt = 0;
     } else {
+      this.lastRenderedKey = ""; // the canvas may have been discarded while hidden: always draw once on resume
       this.paint();
       this.schedule();
     }
@@ -343,8 +418,13 @@ export class CafeScene {
     if (this.destroyed || this.paused || !this.initialised) return;
     this.timer = setTimeout(() => {
       this.timer = null;
-      this.step();
-      this.schedule();
+      try {
+        this.step();
+      } catch (e) {
+        this.note({ type: "draw_error", message: String(e) }, `step failed: ${String(e)}`);
+      } finally {
+        this.schedule(); // the animation chain must never die because one frame threw
+      }
     }, this.interval());
   }
 
@@ -432,12 +512,23 @@ export class CafeScene {
       const live = exec.spot === "desk" && !exec.route.length && (exec.pose === "typing" || exec.pose === "reading" || exec.pose === "writing" || exec.pose === "thinking");
       this.monitor.texture = this.monitorTex[live ? 1 + (t % 2) : exec.pose === "ready" ? 1 : 0] as Texture;
     }
+    // While the context is lost there is nothing to draw into: wait for the restore (which forces a redraw) instead of counting failures.
+    if (this.health.state === "lost" || this.canvasEl?.getContext("webgl2")?.isContextLost() || this.canvasEl?.getContext("webgl")?.isContextLost()) {
+      this.lastRenderedKey = "";
+      return;
+    }
     // Skip the GPU draw when nothing visible changed since the last frame.
     const key = this.frameKey();
     if (key === this.lastRenderedKey) return;
     this.lastRenderedKey = key;
-    this.app.render();
-    this.rendered++;
+    try {
+      this.app.render();
+      this.rendered++;
+      this.note({ type: "draw_ok" });
+    } catch (e) {
+      this.lastRenderedKey = ""; // draw it again next tick
+      this.note({ type: "draw_error", message: String(e) }, `render failed: ${String(e)}`);
+    }
   }
 
   private frameKey(): string {
@@ -459,6 +550,9 @@ export class CafeScene {
       gpuVendor: ext && gl ? String(gl.getParameter(ext.UNMASKED_VENDOR_WEBGL)) : "unknown",
       gpuRenderer: ext && gl ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "unknown",
       framesTicked: this.tickCount,
+      health: this.health.state,
+      healthReason: this.health.reason,
+      recentErrors: [...this.errorLog],
       framesRendered: this.rendered,
       timerActive: this.timer !== null,
       sharedTicker: { started: Ticker.shared.started, listeners: Ticker.shared.count },
@@ -469,6 +563,9 @@ export class CafeScene {
   destroy(): void {
     this.destroyed = true;
     this.clearTimer();
+    if (this.restoreTimer !== null) clearTimeout(this.restoreTimer);
+    this.canvasEl?.removeEventListener("webglcontextlost", this.onContextLost);
+    this.canvasEl?.removeEventListener("webglcontextrestored", this.onContextRestored);
     this.speechTimers.forEach(clearTimeout);
     if (this.initialised) {
       this.app.ticker.stop();

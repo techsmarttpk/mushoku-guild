@@ -1,5 +1,6 @@
 mod approver;
 mod attachments;
+mod todos;
 mod uchat;
 mod autopilot;
 mod browser;
@@ -168,6 +169,10 @@ pub fn run() {
             commands::attachment_list,
             commands::attachment_remove,
             commands::attachment_preview,
+            todos::todo_list,
+            todos::todo_save,
+            todos::todo_set_done,
+            todos::todo_delete,
             uchat::uchat_list,
             uchat::uchat_open,
             uchat::uchat_older,

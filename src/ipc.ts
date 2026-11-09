@@ -1,6 +1,7 @@
 // Typed wrappers around the Rust commands. The frontend only ever talks to Rust through these.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Todo } from "./domain/todos.ts";
 import type {
   AppEvent,
   ChatGptStatus,
@@ -147,5 +148,9 @@ export const api = {
   uchatCancel: () => invoke<void>("uchat_cancel"),
   uchatRename: (conversationId: number, title: string) => invoke<void>("uchat_rename", { conversationId, title }),
   uchatDelete: (conversationId: number) => invoke<void>("uchat_delete", { conversationId }),
+  todoList: () => invoke<Todo[]>("todo_list"),
+  todoSave: (id: number | null, title: string, description: string, priority: string, due: string | null, projectId: number | null) => invoke<Todo>("todo_save", { id, title, description, priority, due, projectId }),
+  todoSetDone: (id: number, done: boolean) => invoke<Todo>("todo_set_done", { id, done }),
+  todoDelete: (id: number) => invoke<void>("todo_delete", { id }),
   permissionDecide: (requestId: string, allow: boolean) => invoke<boolean>("permission_decide", { requestId, allow }),
 };

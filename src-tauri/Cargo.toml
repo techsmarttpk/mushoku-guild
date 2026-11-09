@@ -1,6 +1,6 @@
 [package]
 name = "mushoku-guild"
-version = "0.1.0"
+version = "0.2.0"
 description = "Mushoku Guild: a lightweight game-inspired desktop app for orchestrating AI-assisted development"
 edition = "2021"
 publish = false

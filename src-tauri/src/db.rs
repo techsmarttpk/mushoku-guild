@@ -98,6 +98,15 @@ CREATE TABLE uchat_messages (
   id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL REFERENCES uchat_conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'complete', created_at INTEGER NOT NULL);
 CREATE INDEX uchat_msg_conv ON uchat_messages(conversation_id, id);
+"#,
+r#"
+CREATE TABLE todos (
+  id INTEGER PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+  priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low','medium','high')),
+  due TEXT, done INTEGER NOT NULL DEFAULT 0, done_at INTEGER,
+  project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX todos_done ON todos(done, due);
 "#];
 
 /// Task lifecycle. `from -> to` pairs not listed here are rejected.
